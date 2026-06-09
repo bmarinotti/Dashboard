@@ -70,7 +70,7 @@ hr{border-color:var(--border)!important;margin:0rem 0!important}
 /* ── Tabs ─ segmented control moderno ── */
 .stTabs [data-baseweb="tab-list"]{
     background:var(--surf);border:1px solid var(--border);
-    border-radius:var(--radius);padding:10px;gap:4px;
+    border-radius:var(--radius);padding:5px;gap:4px;
     box-shadow: 0 1px 2px rgba(0,0,0,0.02);
 }
 .stTabs [data-baseweb="tab"]{
