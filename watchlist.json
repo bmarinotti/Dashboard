@@ -1,0 +1,67 @@
+[
+  {
+    "ticker": "TAEE11.SA",
+    "name": "Taesa",
+    "group": "BR"
+  },
+  {
+    "ticker": "ISAE4.SA",
+    "name": "Isa Cteep",
+    "group": "BR"
+  },
+  {
+    "ticker": "BBSE3.SA",
+    "name": "BB Seguridade",
+    "group": "BR"
+  },
+  {
+    "ticker": "ITUB4.SA",
+    "name": "Itaú Unibanco",
+    "group": "BR"
+  },
+  {
+    "ticker": "SANB11.SA",
+    "name": "Santander BR",
+    "group": "BR"
+  },
+  {
+    "ticker": "BRBI11.SA",
+    "name": "BR Advisory",
+    "group": "BR"
+  },
+  {
+    "ticker": "ABCB4.SA",
+    "name": "ABC Brasil",
+    "group": "BR"
+  },
+  {
+    "ticker": "CPFE3.SA",
+    "name": "CPFL Energia",
+    "group": "BR"
+  },
+  {
+    "ticker": "IND",
+    "name": "Ibov Futuro",
+    "group": "FUTURES"
+  },
+  {
+    "ticker": "USDBRL=X",
+    "name": "Dólar Comercial",
+    "group": "INT"
+  },
+  {
+    "ticker": "^GSPC",
+    "name": "S&P 500",
+    "group": "INT"
+  },
+  {
+    "ticker": "NKE",
+    "name": "Nike",
+    "group": "INT"
+  },
+  {
+    "ticker": "BRK-B",
+    "name": "Berkshire B",
+    "group": "INT"
+  }
+]

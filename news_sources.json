@@ -1,0 +1,91 @@
+[
+  {
+    "name": "Sherwood News",
+    "rss_candidates": [
+      "https://sherwood.news/feed/",
+      "https://sherwood.news/rss/",
+      "https://sherwood.news/rss.xml",
+      "https://sherwood.news/feed.xml"
+    ],
+    "url": "https://sherwood.news",
+    "allow_gn": true,
+    "enabled": true
+  },
+  {
+    "name": "WSJ",
+    "rss_candidates": [
+      "https://feeds.a.wallstreetjournal.com/rss/news_business.xml",
+      "https://feeds.a.wallstreetjournal.com/rss/wsj_latest.xml",
+      "https://feeds.a.wallstreetjournal.com/rss/markets_main.xml",
+      "https://feeds.content.dowjones.io/public/rss/mw_realtimeheadlines",
+      "https://www.wsj.com/news/rss-news-and-feeds"
+    ],
+    "url": "https://wsj.com",
+    "allow_gn": true,
+    "enabled": true
+  },
+  {
+    "name": "Valor Econômico",
+    "rss_candidates": [
+      "https://valor.globo.com/rss/",
+      "https://valor.globo.com/rss/home/",
+      "https://valor.globo.com/financas/feed",
+      "https://valor.globo.com/empresas/feed",
+      "https://valor.globo.com/mercados/feed",
+      "https://rss.globo.com/valor/"
+    ],
+    "url": "https://valor.globo.com",
+    "allow_gn": true,
+    "enabled": true
+  },
+  {
+    "name": "Neofeed",
+    "rss_candidates": [
+      "https://neofeed.com.br/feed/",
+      "https://neofeed.com.br/rss/",
+      "https://neofeed.com.br/rss.xml"
+    ],
+    "url": "https://neofeed.com.br",
+    "allow_gn": true,
+    "enabled": true
+  },
+  {
+    "name": "Metro Quadrado",
+    "rss_candidates": [
+      "https://www.metroquadrado.com.br/noticias/feed/",
+      "https://www.metroquadrado.com.br/feed/"
+    ],
+    "html_scrape_url": "https://metroquadrado.com/",
+    "html_scrape_url_fallbacks": [
+      "https://www.metroquadrado.com.br/",
+      "https://www.metroquadrado.com.br/noticias/"
+    ],
+    "html_exclude_subtitle": [
+      "Um conteudo",
+      "Um conteúdo"
+    ],
+    "url": "https://metroquadrado.com",
+    "allow_gn": false,
+    "enabled": true
+  },
+  {
+    "name": "Brazil Journal",
+    "rss_candidates": [
+      "https://braziljournal.com/feed/",
+      "https://braziljournal.com/rss/"
+    ],
+    "url": "https://braziljournal.com",
+    "allow_gn": true,
+    "enabled": true
+  },
+  {
+    "name": "InvestNews",
+    "rss_candidates": [
+      "https://investnews.com.br/feed/",
+      "https://investnews.com.br/rss/"
+    ],
+    "url": "https://investnews.com.br",
+    "allow_gn": true,
+    "enabled": true
+  }
+]
