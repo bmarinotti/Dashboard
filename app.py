@@ -1151,15 +1151,47 @@ _DEFAULT_NEWS = [
 ]
 
 def _load_news_sources():
+    """Carrega fontes do disco e mescla com `_DEFAULT_NEWS` qualquer fonte
+    nova que ainda não exista no JSON local (por nome). Isso garante que
+    novas fontes adicionadas em atualizações do código apareçam mesmo
+    se o JSON do usuário já existir.
+    """
+    existing = []
     if os.path.exists(NEWS_FILE):
         try:
             with open(NEWS_FILE, encoding="utf-8") as f:
-                return json.load(f)
+                existing = json.load(f) or []
         except Exception:
-            pass
-    s = [d.copy() for d in _DEFAULT_NEWS]
-    _save_news_sources(s)
-    return s
+            existing = []
+
+    if not existing:
+        s = [d.copy() for d in _DEFAULT_NEWS]
+        _save_news_sources(s)
+        return s
+
+    # Merge: adiciona qualquer default ausente (por nome) ao final
+    existing_names = {(s.get("name") or "").lower() for s in existing}
+    added = False
+    for d in _DEFAULT_NEWS:
+        if (d.get("name") or "").lower() not in existing_names:
+            existing.append(d.copy())
+            added = True
+
+    # Para fontes que já existem mas faltam campos importantes (ex: site_strategy
+    # adicionado em release nova), atualiza esses campos sem mexer no enabled
+    by_name = {(s.get("name") or "").lower(): s for s in existing}
+    for d in _DEFAULT_NEWS:
+        nm = (d.get("name") or "").lower()
+        if nm in by_name:
+            cur = by_name[nm]
+            for k in ("site_strategy", "rss_candidates", "url"):
+                if k in d and not cur.get(k):
+                    cur[k] = d[k]
+                    added = True
+
+    if added:
+        _save_news_sources(existing)
+    return existing
 
 def _save_news_sources(sources):
     with open(NEWS_FILE, "w", encoding="utf-8") as f:
@@ -1354,69 +1386,182 @@ def _fetch_site_html(url: str):
         return None, str(e)
 
 
+def _markdown_to_html_simple(md: str) -> str:
+    """Conversor markdown→HTML mínimo (sem dependências externas).
+    Trata headings, parágrafos, listas, blockquotes, links e código inline.
+    """
+    out_lines = []
+    in_list = False
+    for raw in md.splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            if in_list:
+                out_lines.append("</ul>")
+                in_list = False
+            out_lines.append("")
+            continue
+
+        # Headings
+        m = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if m:
+            if in_list:
+                out_lines.append("</ul>"); in_list = False
+            n = len(m.group(1))
+            out_lines.append(f"<h{n}>{m.group(2)}</h{n}>")
+            continue
+
+        # Blockquote
+        if line.startswith("> "):
+            if in_list:
+                out_lines.append("</ul>"); in_list = False
+            out_lines.append(f"<blockquote>{line[2:]}</blockquote>")
+            continue
+
+        # Lista
+        if re.match(r"^\s*[-*+]\s+", line):
+            if not in_list:
+                out_lines.append("<ul>"); in_list = True
+            item = re.sub(r"^\s*[-*+]\s+", "", line)
+            out_lines.append(f"<li>{item}</li>")
+            continue
+
+        if in_list:
+            out_lines.append("</ul>"); in_list = False
+        out_lines.append(f"<p>{line}</p>")
+    if in_list:
+        out_lines.append("</ul>")
+
+    html = "\n".join(out_lines)
+    # Links: [texto](url)
+    html = re.sub(r"\[([^\]]+)\]\(([^)]+)\)",
+                  r'<a href="\2" target="_blank" rel="noopener">\1</a>', html)
+    # Bold e itálico (ordem importa: bold primeiro)
+    html = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", html)
+    html = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", html)
+    # Código inline
+    html = re.sub(r"`([^`]+)`", r"<code>\1</code>", html)
+    # Imagens (markdown): ![alt](url)
+    html = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)",
+                  r'<img src="\2" alt="\1" loading="lazy">', html)
+    return html
+
+
+def _wrap_reader_html(content: str, base_url: str) -> str:
+    """Envelopa conteúdo em HTML completo com estilo limpo de leitura."""
+    return (
+        "<!doctype html><html><head>"
+        "<meta charset='utf-8'>"
+        "<base href='" + base_url + "'>"
+        "<style>"
+        "body{font-family:'Plus Jakarta Sans',system-ui,-apple-system,sans-serif;"
+        "color:#0F172A;background:#FFFFFF;padding:24px 32px;line-height:1.65;"
+        "max-width:900px;margin:0 auto;font-size:14px;}"
+        "h1,h2,h3,h4{color:#0F172A;letter-spacing:-.01em;margin-top:1.4em;}"
+        "h1{font-size:1.6em;}h2{font-size:1.3em;}h3{font-size:1.1em;}"
+        "a{color:#2563EB;text-decoration:none;}"
+        "a:hover{text-decoration:underline;}"
+        "p{margin:.6em 0;}"
+        "img{max-width:100%;height:auto;border-radius:8px;margin:10px 0;}"
+        "hr{border:none;border-top:1px solid #E2E8F0;margin:20px 0;}"
+        "code{background:#F1F5F9;padding:2px 6px;border-radius:4px;font-size:.92em;}"
+        "blockquote{border-left:3px solid #CBD5E1;padding:4px 12px;color:#475569;margin:10px 0;}"
+        "ul,ol{padding-left:1.4em;}"
+        "li{margin:.3em 0;}"
+        "</style></head><body>"
+        + content +
+        "</body></html>"
+    )
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def _fetch_via_reader_proxy(url: str):
-    """Fallback para sites que bloqueiam iframe e cujo HTML não renderiza
-    server-side (SPAs JS-only como Valor Globo, ge.globo, ESPN).
-    Usa o serviço público Jina AI Reader (r.jina.ai), que faz headless
-    browsing e devolve HTML legível.
+    """Tenta múltiplas estratégias para renderizar páginas JS-only que bloqueiam iframe.
 
-    Retorna (html_envelopado_para_renderizacao, erro).
+    Ordem de tentativas:
+    1. Jina AI Reader retornando HTML (mais rico)
+    2. Jina AI Reader retornando markdown → convertido para HTML
+    3. Erro consolidado com diagnóstico
+
+    Retorna (html_envelopado, erro).
     """
-    proxy_url = f"https://r.jina.ai/{url}"
+    target = url.strip()
+    if not target.startswith(("http://", "https://")):
+        target = "https://" + target
+
+    base_headers = {
+        "User-Agent": _BROWSER_HEADERS["User-Agent"],
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    }
+
+    diagnostics = []
+
+    # Estratégia 1: Jina Reader em modo HTML
     try:
         r = requests.get(
-            proxy_url,
+            f"https://r.jina.ai/{target}",
             timeout=30,
-            headers={
-                "User-Agent": _BROWSER_HEADERS["User-Agent"],
-                "Accept": "text/html, text/plain",
-                "X-Return-Format": "html",
-            },
+            headers={**base_headers, "Accept": "text/html, */*", "X-Return-Format": "html"},
         )
-        r.raise_for_status()
-        body = r.text or ""
-        if not body.strip():
-            return None, "Conteúdo vazio do reader proxy"
-
-        is_html = "<html" in body.lower() or "<body" in body.lower() or "<div" in body.lower()
-        if is_html:
-            content = body
+        if r.status_code == 200:
+            body = (r.text or "").strip()
+            if body and len(body) > 400 and ("<" in body and ">" in body):
+                return _wrap_reader_html(body, target), None
+            diagnostics.append(f"Jina(html): resposta curta ({len(body)} chars)")
         else:
-            # Converte texto/markdown simples em HTML legível
-            safe = (
-                body.replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
-            )
-            content = "<pre style='white-space:pre-wrap;font-family:inherit'>" + safe + "</pre>"
-
-        wrapper = (
-            "<!doctype html><html><head>"
-            "<meta charset='utf-8'>"
-            "<base href='" + url + "'>"
-            "<style>"
-            "body{font-family:'Plus Jakarta Sans',system-ui,-apple-system,sans-serif;"
-            "color:#0F172A;background:#FFFFFF;padding:24px 32px;line-height:1.65;"
-            "max-width:900px;margin:0 auto;font-size:14px;}"
-            "h1,h2,h3,h4{color:#0F172A;letter-spacing:-.01em;margin-top:1.4em;}"
-            "h1{font-size:1.6em;}h2{font-size:1.3em;}h3{font-size:1.1em;}"
-            "a{color:#2563EB;text-decoration:none;}"
-            "a:hover{text-decoration:underline;}"
-            "p{margin:.6em 0;}"
-            "img{max-width:100%;height:auto;border-radius:8px;margin:10px 0;}"
-            "hr{border:none;border-top:1px solid #E2E8F0;margin:20px 0;}"
-            "code{background:#F1F5F9;padding:2px 6px;border-radius:4px;font-size:.92em;}"
-            "blockquote{border-left:3px solid #CBD5E1;padding:4px 12px;color:#475569;margin:10px 0;}"
-            "</style></head><body>"
-            + content +
-            "</body></html>"
-        )
-        return wrapper, None
-    except requests.HTTPError as e:
-        return None, f"HTTP {e.response.status_code} no reader proxy"
+            diagnostics.append(f"Jina(html): HTTP {r.status_code}")
     except Exception as e:
-        return None, str(e)
+        diagnostics.append(f"Jina(html): {e}")
+
+    # Estratégia 2: Jina Reader em modo padrão (markdown)
+    try:
+        r = requests.get(
+            f"https://r.jina.ai/{target}",
+            timeout=30,
+            headers={**base_headers, "Accept": "text/plain, */*"},
+        )
+        if r.status_code == 200:
+            md = (r.text or "").strip()
+            if md and len(md) > 200:
+                html_body = _markdown_to_html_simple(md)
+                return _wrap_reader_html(html_body, target), None
+            diagnostics.append(f"Jina(md): resposta curta ({len(md)} chars)")
+        else:
+            diagnostics.append(f"Jina(md): HTTP {r.status_code}")
+    except Exception as e:
+        diagnostics.append(f"Jina(md): {e}")
+
+    return None, " · ".join(diagnostics) or "Reader proxy indisponível"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _wayback_iframe_url(url: str) -> str:
+    """Constrói URL de snapshot mais recente da Wayback Machine usando
+    a API pública `/wayback/available`. Se a API falhar, cai para o
+    padrão `/web/{ano-atual}/url` que normalmente redireciona para o
+    snapshot mais próximo.
+    """
+    target = url.strip()
+    if not target.startswith(("http://", "https://")):
+        target = "https://" + target
+
+    # API oficial: retorna o snapshot mais próximo da data atual
+    try:
+        api = f"https://archive.org/wayback/available?url={target}"
+        r = requests.get(api, timeout=10, headers={"User-Agent": _BROWSER_HEADERS["User-Agent"]})
+        if r.status_code == 200:
+            j = r.json() or {}
+            snap = (j.get("archived_snapshots") or {}).get("closest") or {}
+            snap_url = snap.get("url")
+            if snap_url:
+                # Wayback fornece URL com prefixo http: — normaliza para https
+                if snap_url.startswith("http://web.archive.org"):
+                    snap_url = snap_url.replace("http://", "https://", 1)
+                return snap_url
+    except Exception:
+        pass
+
+    # Fallback: ano atual (frequentemente redireciona para snapshot recente)
+    return f"https://web.archive.org/web/{datetime.now().year}/{target}"
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1460,9 +1605,10 @@ def _check_iframe_allowed(url: str) -> bool:
 
 
 def render_noticias():
-    if "news_sources" not in st.session_state:
-        st.session_state["news_sources"] = _load_news_sources()
-    sources = st.session_state["news_sources"]
+    # Sempre recarrega do disco para refletir novas fontes adicionadas
+    # via _DEFAULT_NEWS em atualizações do código (ex: ESPN, GE).
+    sources = _load_news_sources()
+    st.session_state["news_sources"] = sources
 
     with st.expander("⚙️ Gerenciar fontes", expanded=False):
         st.caption("Ative/desative fontes ou adicione novas (URL do feed RSS).")
@@ -1571,22 +1717,23 @@ def render_noticias():
     # ── MODO IFRAME (Site) ──────────────────────────────────────────
     if mode == "iframe":
         if site_strategy == "reader":
-            # Estratégia explícita: usa Jina Reader (sites JS-only)
+            # Estratégia explícita: Jina Reader → fallback Wayback Machine iframe
             with st.spinner(f"Carregando {sel} via reader proxy…"):
                 html_content, err_r = _fetch_via_reader_proxy(site_url)
-            if err_r and not html_content:
-                st.warning(
-                    f"**{sel}** — falha no reader proxy: {err_r}. "
-                    f"Use **📰 Artigos** ou o link → nova aba."
-                )
-            elif html_content:
+            if html_content:
                 st.caption(
                     f"📡 Renderizado via reader proxy (Jina AI)  ·  conteúdo limpo  ·  "
                     f"links abrem em nova aba"
                 )
                 _components.html(html_content, height=760, scrolling=True)
             else:
-                st.warning("Conteúdo vazio. Use **📰 Artigos**.")
+                # Fallback automático: snapshot mais recente da Wayback Machine
+                wb = _wayback_iframe_url(site_url)
+                st.caption(
+                    f"📚 Reader proxy indisponível ({err_r}). "
+                    f"Exibindo snapshot mais recente da Wayback Machine."
+                )
+                _components.iframe(wb, height=760, scrolling=True)
         elif can_iframe:
             # Site permite embedding direto — iframe nativo
             _components.iframe(site_url, height=760, scrolling=True)
@@ -1749,6 +1896,12 @@ def _fetch_nl_index(source_name: str):
                     link, pub = e.get("link", ""), e.get("published", e.get("updated", ""))
                     date_str = _extract_date(pub) or _extract_date(link) or ""
                     if title and link:
+                        # Filtro TNS Sports: ignora "INSCREVA-SE"
+                        if source_name == "TNS Sports" and (
+                            "INSCREVA-SE" in title.upper()
+                            or "INSCREVASE" in title.upper().replace("-", "")
+                        ):
+                            continue
                         items.append({"url": link, "title": title, "date": date_str})
                 if items: return items, None
         except Exception: pass
@@ -1818,6 +1971,14 @@ def _fetch_nl_index(source_name: str):
 
         if not editions:
             return [], "Nenhuma edição encontrada"
+
+        # Filtro específico TNS Sports: ignora edições com "INSCREVA-SE" no título
+        if source_name == "TNS Sports":
+            editions = [
+                e for e in editions
+                if "INSCREVA-SE" not in (e.get("title") or "").upper()
+                and "INSCREVASE" not in (e.get("title") or "").upper().replace("-", "")
+            ]
 
         # Preserva a ordem do DOM (Archive lista mais recente primeiro)
         # Separa por data apenas para ordenar as datadas; sem-data ficam na posição original
@@ -2315,10 +2476,15 @@ def render_cvm():
         fdf = fdf[(fdf[date_col].dt.date >= from_d) & (fdf[date_col].dt.date <= to_d)]
     if tipo_col and sel_tipo and sel_tipo != "Todos":
         fdf = fdf[fdf[tipo_col].astype(str) == sel_tipo]
+
+    # Ordena por Data_requerimento mais recente primeiro (antes de fatiar colunas)
+    if date_col and date_col in fdf.columns:
+        fdf = fdf.sort_values(date_col, ascending=False, na_position="last")
+
     if sel_cols:
         fdf = fdf[[c for c in sel_cols if c in fdf.columns]]
 
-    st.caption(f"{len(fdf):,} registros após filtros")
+    st.caption(f"{len(fdf):,} registros após filtros · ordenado por data mais recente")
 
     # ── Formatação: Valor_Total_Registrado com separador de milhar ──
     fmt_map = {}
@@ -2332,12 +2498,33 @@ def render_cvm():
 
     styled = fdf.style.format(fmt_map, na_rep="—") if fmt_map else fdf
 
+    # ── Autosize por coluna: calcula width baseado em conteúdo + cabeçalho ──
+    def _autosize_config(df_in):
+        cfg = {}
+        for col in df_in.columns:
+            header_len = len(str(col))
+            try:
+                sample = df_in[col].dropna().head(500).astype(str).str.len()
+                content_max = int(sample.max()) if not sample.empty else 0
+            except Exception:
+                content_max = 0
+            approx = max(header_len, content_max)
+            # Buckets Streamlit: small (~75px), medium (~200px), large (~400px)
+            if approx <= 14:
+                w = "small"
+            elif approx <= 40:
+                w = "medium"
+            else:
+                w = "large"
+            cfg[col] = st.column_config.Column(width=w, help=str(col))
+        return cfg
+
     st.dataframe(
         styled,
         use_container_width=True,
         hide_index=True,
         height=500,
-        column_config=get_centralized_config(fdf),
+        column_config=_autosize_config(fdf),
     )
 
     csv_bytes = fdf.to_csv(index=False, sep=";", encoding="utf-8-sig").encode()
