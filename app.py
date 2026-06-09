@@ -70,7 +70,7 @@ hr{border-color:var(--border)!important;margin:0rem 0!important}
 /* ── Tabs ─ segmented control moderno ── */
 .stTabs [data-baseweb="tab-list"]{
     background:var(--surf);border:1px solid var(--border);
-    border-radius:var(--radius);padding:4px;gap:4px;
+    border-radius:var(--radius);padding:10px;gap:4px;
     box-shadow: 0 1px 2px rgba(0,0,0,0.02);
 }
 .stTabs [data-baseweb="tab"]{
@@ -763,6 +763,16 @@ def render_principal(di, anbima, calls, ajuste_locked):
             if "ajuste_locked" in st.session_state:
                 del st.session_state["ajuste_locked"]
             st.rerun()
+        if st.button("Atualizar DI", key="upd_di_principal", use_container_width=True):
+            # Limpa apenas o cache de fetch_b3_di (DI Futuro)
+            try:
+                fetch_b3_di.clear()
+            except Exception:
+                # Fallback: limpa todo o cache se .clear() não estiver disponível
+                st.cache_data.clear()
+            if "ajuste_locked" in st.session_state:
+                del st.session_state["ajuste_locked"]
+            st.rerun(scope="fragment")
 
     with col_di:
         tickers = january_di_tickers()
@@ -1089,7 +1099,8 @@ _DEFAULT_NEWS = [
          "https://valor.globo.com/mercados/feed",
          "https://rss.globo.com/valor/",
      ],
-     "url": "https://valor.globo.com", "allow_gn": True, "enabled": True},
+     "url": "https://valor.globo.com", "site_strategy": "reader",
+     "allow_gn": True, "enabled": True},
     {"name": "Neofeed",
      "rss_candidates": [
          "https://neofeed.com.br/feed/",
@@ -1121,6 +1132,22 @@ _DEFAULT_NEWS = [
          "https://investnews.com.br/rss/",
      ],
      "url": "https://investnews.com.br", "allow_gn": True, "enabled": True},
+    {"name": "Globo Esporte",
+     "rss_candidates": [
+         "https://ge.globo.com/rss/ge/",
+         "https://ge.globo.com/rss/",
+         "https://pox.globo.com/rss/ge",
+     ],
+     "url": "https://ge.globo.com", "site_strategy": "reader",
+     "allow_gn": True, "enabled": True},
+    {"name": "ESPN",
+     "rss_candidates": [
+         "https://www.espn.com/espn/rss/news",
+         "https://www.espn.com/espn/rss/nfl/news",
+         "https://www.espn.com/espn/rss/nba/news",
+     ],
+     "url": "https://www.espn.com", "site_strategy": "reader",
+     "allow_gn": True, "enabled": True},
 ]
 
 def _load_news_sources():
@@ -1327,6 +1354,71 @@ def _fetch_site_html(url: str):
         return None, str(e)
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _fetch_via_reader_proxy(url: str):
+    """Fallback para sites que bloqueiam iframe e cujo HTML não renderiza
+    server-side (SPAs JS-only como Valor Globo, ge.globo, ESPN).
+    Usa o serviço público Jina AI Reader (r.jina.ai), que faz headless
+    browsing e devolve HTML legível.
+
+    Retorna (html_envelopado_para_renderizacao, erro).
+    """
+    proxy_url = f"https://r.jina.ai/{url}"
+    try:
+        r = requests.get(
+            proxy_url,
+            timeout=30,
+            headers={
+                "User-Agent": _BROWSER_HEADERS["User-Agent"],
+                "Accept": "text/html, text/plain",
+                "X-Return-Format": "html",
+            },
+        )
+        r.raise_for_status()
+        body = r.text or ""
+        if not body.strip():
+            return None, "Conteúdo vazio do reader proxy"
+
+        is_html = "<html" in body.lower() or "<body" in body.lower() or "<div" in body.lower()
+        if is_html:
+            content = body
+        else:
+            # Converte texto/markdown simples em HTML legível
+            safe = (
+                body.replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+            )
+            content = "<pre style='white-space:pre-wrap;font-family:inherit'>" + safe + "</pre>"
+
+        wrapper = (
+            "<!doctype html><html><head>"
+            "<meta charset='utf-8'>"
+            "<base href='" + url + "'>"
+            "<style>"
+            "body{font-family:'Plus Jakarta Sans',system-ui,-apple-system,sans-serif;"
+            "color:#0F172A;background:#FFFFFF;padding:24px 32px;line-height:1.65;"
+            "max-width:900px;margin:0 auto;font-size:14px;}"
+            "h1,h2,h3,h4{color:#0F172A;letter-spacing:-.01em;margin-top:1.4em;}"
+            "h1{font-size:1.6em;}h2{font-size:1.3em;}h3{font-size:1.1em;}"
+            "a{color:#2563EB;text-decoration:none;}"
+            "a:hover{text-decoration:underline;}"
+            "p{margin:.6em 0;}"
+            "img{max-width:100%;height:auto;border-radius:8px;margin:10px 0;}"
+            "hr{border:none;border-top:1px solid #E2E8F0;margin:20px 0;}"
+            "code{background:#F1F5F9;padding:2px 6px;border-radius:4px;font-size:.92em;}"
+            "blockquote{border-left:3px solid #CBD5E1;padding:4px 12px;color:#475569;margin:10px 0;}"
+            "</style></head><body>"
+            + content +
+            "</body></html>"
+        )
+        return wrapper, None
+    except requests.HTTPError as e:
+        return None, f"HTTP {e.response.status_code} no reader proxy"
+    except Exception as e:
+        return None, str(e)
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _check_iframe_allowed(url: str) -> bool:
     """Verifica server-side se o site permite embedding via iframe.
@@ -1438,9 +1530,15 @@ def render_noticias():
     if not site_url.startswith("http"):
         site_url = "https://" + site_url
 
-    # ── Verificação server-side de iframe (cache 1h) ────────────────
-    with st.spinner(f"Verificando {sel}…"):
-        can_iframe = _check_iframe_allowed(site_url)
+    # Estratégia configurada por fonte (ex: "reader" para sites JS-only como Valor)
+    site_strategy = src.get("site_strategy", "auto")  # "auto" | "reader" | "iframe"
+
+    # ── Verificação server-side de iframe (cache 1h) — pulada se reader ──
+    if site_strategy == "reader":
+        can_iframe = False
+    else:
+        with st.spinner(f"Verificando {sel}…"):
+            can_iframe = _check_iframe_allowed(site_url)
 
     key_mode = f"news_mode_{sel}"
     if key_mode not in st.session_state:
@@ -1472,26 +1570,51 @@ def render_noticias():
 
     # ── MODO IFRAME (Site) ──────────────────────────────────────────
     if mode == "iframe":
-        if can_iframe:
+        if site_strategy == "reader":
+            # Estratégia explícita: usa Jina Reader (sites JS-only)
+            with st.spinner(f"Carregando {sel} via reader proxy…"):
+                html_content, err_r = _fetch_via_reader_proxy(site_url)
+            if err_r and not html_content:
+                st.warning(
+                    f"**{sel}** — falha no reader proxy: {err_r}. "
+                    f"Use **📰 Artigos** ou o link → nova aba."
+                )
+            elif html_content:
+                st.caption(
+                    f"📡 Renderizado via reader proxy (Jina AI)  ·  conteúdo limpo  ·  "
+                    f"links abrem em nova aba"
+                )
+                _components.html(html_content, height=760, scrolling=True)
+            else:
+                st.warning("Conteúdo vazio. Use **📰 Artigos**.")
+        elif can_iframe:
             # Site permite embedding direto — iframe nativo
             _components.iframe(site_url, height=760, scrolling=True)
         else:
             # Site bloqueia (X-Frame-Options/CSP) — busca server-side e renderiza inline
             with st.spinner(f"Carregando {sel} via proxy server-side…"):
                 html_content, err_p = _fetch_site_html(site_url)
-            if err_p:
-                st.warning(
-                    f"**{sel}** bloqueia incorporação e o proxy falhou: {err_p}. "
-                    f"Use **📰 Artigos** ou o link → nova aba."
-                )
-            elif html_content:
+            # Fallback automático para reader proxy caso o HTML server-side falhe
+            if err_p or not html_content:
+                with st.spinner(f"Tentando reader proxy…"):
+                    html_content, err_r = _fetch_via_reader_proxy(site_url)
+                if html_content:
+                    st.caption(
+                        f"📡 Renderizado via reader proxy (Jina AI)  ·  fallback automático  ·  "
+                        f"links abrem em nova aba"
+                    )
+                    _components.html(html_content, height=760, scrolling=True)
+                else:
+                    st.warning(
+                        f"**{sel}** bloqueia incorporação. Erro proxy: {err_p or '—'}. "
+                        f"Erro reader: {err_r or '—'}. Use **📰 Artigos** ou o link → nova aba."
+                    )
+            else:
                 st.caption(
                     f"📡 Carregado via proxy server-side  ·  X-Frame-Options contornado  ·  "
                     f"links abrem em nova aba"
                 )
                 _components.html(html_content, height=760, scrolling=True)
-            else:
-                st.warning(f"Conteúdo vazio. Use **📰 Artigos**.")
 
     # ── MODO ARTIGOS (RSS + scraper) ─────────────────────────────────
     else:
@@ -1745,57 +1868,95 @@ def _latest_edition(editions):
     return editions[0] if editions else None
 
 def render_newsletters():
-    cols = st.columns(len(_NEWSLETTER_SOURCES), gap="large")
-    for col, (name, cfg) in zip(cols, _NEWSLETTER_SOURCES.items()):
-        with col:
-            st.markdown(f'<p class="mon-head">{name}</p>', unsafe_allow_html=True)
-            if "btn_ref" not in st.session_state: st.session_state["btn_ref"] = {}
+    # ── Seletor de newsletter (mesmo padrão da aba Notícias) ─────────
+    nl_names = list(_NEWSLETTER_SOURCES.keys())
+    if not nl_names:
+        st.info("Nenhuma newsletter configurada.")
+        return
 
-            with st.spinner("Buscando edições…"):
-                editions, err_idx = _fetch_nl_index(name)
+    if "nl_sel" not in st.session_state or st.session_state.get("nl_sel") not in nl_names:
+        st.session_state["nl_sel"] = nl_names[0]
 
-            if err_idx and not editions:
-                st.error(f"Índice indisponível: {err_idx}")
-                st.caption(f"Acesse diretamente: [{cfg['archive_url']}]({cfg['archive_url']})")
-                continue
+    sel = st.radio(
+        "Newsletter",
+        nl_names,
+        horizontal=True,
+        index=nl_names.index(st.session_state["nl_sel"]),
+        key="nl_source_sel",
+        label_visibility="collapsed",
+    )
+    st.session_state["nl_sel"] = sel
 
-            latest = _latest_edition(editions)
+    cfg = _NEWSLETTER_SOURCES.get(sel, {})
+    archive_url = cfg.get("archive_url", "")
 
-            if latest:
-                st.caption(f"Edição mais recente: {latest['date'] or 'data desconhecida'}")
-                st.markdown(
-                    f'<a href="{latest["url"]}" target="_blank" style="color:var(--accent);font-size:13px;font-weight:600;">'
-                    f'{latest["title"][:80]}</a>',
-                    unsafe_allow_html=True,
-                )
+    # ── Busca índice de edições ─────────────────────────────────────
+    with st.spinner(f"Buscando edições · {sel}…"):
+        editions, err_idx = _fetch_nl_index(sel)
 
-                key_open = f"nl_open_{name}"
-                if st.button("Ler no dashboard", key=f"nl_btn_{name}", use_container_width=True):
-                    st.session_state[key_open] = not st.session_state.get(key_open, False)
+    if err_idx and not editions:
+        st.error(f"Índice indisponível: {err_idx}")
+        st.caption(f"Acesse diretamente: [{archive_url}]({archive_url})")
+        return
 
-                if st.session_state.get(key_open, False):
-                    with st.spinner("Carregando conteúdo…"):
-                        html, err_c = _fetch_nl_content(latest["url"])
-                    if err_c:
-                        st.warning(f"Não foi possível carregar: {err_c}")
-                    elif html:
-                        with st.container():
-                            st.markdown(
-                                f'<div style="max-height:70vh;overflow-y:auto;padding:20px;'
-                                f'background:var(--surf);border:1px solid var(--border);border-radius:var(--radius);'
-                                f'font-size:14px;color:var(--text2);line-height:1.6;box-shadow:inset 0 2px 4px rgba(0,0,0,0.02);">{html}</div>',
-                                unsafe_allow_html=True,
-                            )
+    if not editions:
+        st.info(f"Nenhuma edição encontrada para {sel}.")
+        return
 
-            if len(editions) > 1:
-                with st.expander("Ver edições anteriores"):
-                    for ed in editions[1:10]:
-                        label = f"{ed['date']} — {ed['title'][:50]}" if ed['date'] else ed['title'][:60]
-                        st.markdown(
-                            f'<a href="{ed["url"]}" target="_blank" style="color:var(--text3);font-size:12px;">'
-                            f'{label}</a><br>',
-                            unsafe_allow_html=True,
-                        )
+    # ── Seletor de edição (latest por padrão) ───────────────────────
+    latest = _latest_edition(editions) or editions[0]
+
+    edition_labels = []
+    for ed in editions[:25]:
+        lbl = f"{ed['date']} — {ed['title'][:70]}" if ed.get("date") else ed["title"][:90]
+        edition_labels.append(lbl)
+
+    key_ed = f"nl_ed_{sel}"
+    if key_ed not in st.session_state:
+        try:
+            st.session_state[key_ed] = editions.index(latest)
+        except ValueError:
+            st.session_state[key_ed] = 0
+
+    ctrl1, ctrl2 = st.columns([4, 1])
+    with ctrl1:
+        idx = st.selectbox(
+            "Edição",
+            range(len(edition_labels)),
+            format_func=lambda i: edition_labels[i],
+            index=min(st.session_state[key_ed], len(edition_labels) - 1),
+            key=f"nl_ed_sel_{sel}",
+            label_visibility="collapsed",
+        )
+        st.session_state[key_ed] = idx
+    with ctrl2:
+        ed_url = editions[idx]["url"]
+        st.markdown(
+            f'<div style="padding-top:9px">'
+            f'<a href="{ed_url}" target="_blank" '
+            f'style="color:var(--text3);font-size:11px;font-weight:600;text-decoration:none;">'
+            f'↗ Abrir em nova aba</a></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+
+    # ── Renderização full-width da edição selecionada ───────────────
+    ed = editions[idx]
+    ed_date = ed.get("date") or "data desconhecida"
+    st.caption(f"📅 {ed_date}  ·  {ed.get('title', '')[:120]}")
+
+    with st.spinner("Carregando conteúdo…"):
+        html, err_c = _fetch_nl_content(ed["url"])
+
+    if err_c:
+        st.warning(f"Não foi possível carregar: {err_c}")
+        st.markdown(f'[↗ Abrir no site]({ed["url"]})')
+    elif html:
+        st.markdown(
+            f'<div class="news-reader">{html}</div>',
+            unsafe_allow_html=True,
+        )
 
 
 # ================================================================
@@ -2050,40 +2211,133 @@ def render_cvm():
 
     st.caption(f"{len(df):,} registros · {len(df.columns)} colunas · Atualizado há menos de 1h")
 
+    # ── Coluna de data preferida: Data_requerimento ──────────────────
+    def _find_col(df_in, target_name: str):
+        target_norm = target_name.replace("_", "").replace(" ", "").lower()
+        for c in df_in.columns:
+            if c.replace("_", "").replace(" ", "").lower() == target_norm:
+                return c
+        return None
+
+    date_col = _find_col(df, "Data_requerimento")
+    if date_col is None:
+        # Fallback: primeira coluna datetime detectada
+        dt_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+        date_col = dt_cols[0] if dt_cols else None
+
+    # Garante tipo datetime mesmo se a auto-detecção do fetch falhou
+    if date_col and not pd.api.types.is_datetime64_any_dtype(df[date_col]):
+        try:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True)
+        except Exception:
+            pass
+
+    # ── Coluna de tipo de ativo: Tipo_Ativo (exato) ──────────────────
+    tipo_col = _find_col(df, "Tipo_Ativo")
+
+    # ── Colunas-padrão visíveis (na ordem solicitada) ────────────────
+    default_cols_request = [
+        "Data_requerimento",
+        "Status_requerimento",
+        "Valor_Mobiliario",
+        "Nome_Emissor",
+        "Identificacao_devedores_coobrigados",
+        "Nome_Lider",
+        "Valor_Total_Registrado",
+        "Destinacao_recursos",
+        "Descricao_garantias",
+    ]
+    default_cols_present = []
+    for want in default_cols_request:
+        c = _find_col(df, want)
+        if c and c not in default_cols_present:
+            default_cols_present.append(c)
+
+    valor_col = _find_col(df, "Valor_Total_Registrado")
+    if valor_col and not pd.api.types.is_numeric_dtype(df[valor_col]):
+        try:
+            df[valor_col] = pd.to_numeric(
+                df[valor_col].astype(str)
+                    .str.replace(".", "", regex=False)
+                    .str.replace(",", ".", regex=False),
+                errors="coerce",
+            )
+        except Exception:
+            pass
+
     with st.expander("Filtros", expanded=True):
         fc1, fc2, fc3 = st.columns(3)
-        date_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
-        date_col  = date_cols[0] if date_cols else None
+        today = date.today()
         if date_col:
-            min_d, max_d = df[date_col].dropna().min().date(), df[date_col].dropna().max().date()
-            from_d = fc1.date_input("De", value=max_d - timedelta(days=365), min_value=min_d, max_value=max_d, key="cvm_from")
-            to_d   = fc2.date_input("Até", value=max_d, min_value=min_d, max_value=max_d, key="cvm_to")
-        else: from_d = to_d = None
+            series_dates = df[date_col].dropna()
+            if not series_dates.empty:
+                min_d_data = series_dates.min().date()
+                max_d_data = series_dates.max().date()
+            else:
+                min_d_data, max_d_data = today - timedelta(days=365 * 5), today
 
-        tipo_candidates = [c for c in df.columns if any(k in c.upper() for k in ["TIPO","CATEG","CLASSE","ATIVO","OFERTA"])]
-        if tipo_candidates:
-            tipo_col = tipo_candidates[0]
-            tipos = ["Todos"] + sorted(df[tipo_col].dropna().unique().tolist())
+            # Limite superior do widget = hoje (mesmo que dados vão além)
+            widget_max = max(max_d_data, today)
+            # Limite inferior do widget = min disponível
+            widget_min = min(min_d_data, today - timedelta(days=365 * 5))
+            # Padrão: hoje até 6 meses atrás (≈ 182 dias)
+            default_from = today - timedelta(days=182)
+            default_to = today
+            # Garante que os defaults estejam dentro dos limites do widget
+            default_from = max(default_from, widget_min)
+            default_to = min(default_to, widget_max)
+            from_d = fc1.date_input("De", value=default_from,
+                                    min_value=widget_min, max_value=widget_max,
+                                    key="cvm_from", format="DD/MM/YYYY")
+            to_d   = fc2.date_input("Até", value=default_to,
+                                    min_value=widget_min, max_value=widget_max,
+                                    key="cvm_to", format="DD/MM/YYYY")
+        else:
+            from_d = to_d = None
+
+        if tipo_col:
+            tipos = ["Todos"] + sorted(df[tipo_col].dropna().astype(str).unique().tolist())
             sel_tipo = fc3.selectbox("Tipo de ativo", tipos, key="cvm_tipo")
-        else: tipo_col = sel_tipo = None
+        else:
+            sel_tipo = None
+            fc3.caption("Coluna 'Tipo_Ativo' não encontrada no dataset.")
 
         all_cols = list(df.columns)
-        sel_cols = st.multiselect("Colunas a exibir", all_cols, default=all_cols[:min(12, len(all_cols))], key="cvm_cols")
+        sel_cols = st.multiselect(
+            "Colunas a exibir",
+            all_cols,
+            default=default_cols_present if default_cols_present else all_cols[:min(12, len(all_cols))],
+            key="cvm_cols",
+        )
 
     fdf = df.copy()
     if date_col and from_d and to_d:
         fdf = fdf[(fdf[date_col].dt.date >= from_d) & (fdf[date_col].dt.date <= to_d)]
-    if tipo_col and sel_tipo and sel_tipo != "Todos": fdf = fdf[fdf[tipo_col] == sel_tipo]
-    if sel_cols: fdf = fdf[[c for c in sel_cols if c in fdf.columns]]
+    if tipo_col and sel_tipo and sel_tipo != "Todos":
+        fdf = fdf[fdf[tipo_col].astype(str) == sel_tipo]
+    if sel_cols:
+        fdf = fdf[[c for c in sel_cols if c in fdf.columns]]
 
     st.caption(f"{len(fdf):,} registros após filtros")
-    
+
+    # ── Formatação: Valor_Total_Registrado com separador de milhar ──
+    fmt_map = {}
+    if valor_col and valor_col in fdf.columns:
+        fmt_map[valor_col] = (
+            lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            if pd.notna(x) else "—"
+        )
+    if date_col and date_col in fdf.columns and pd.api.types.is_datetime64_any_dtype(fdf[date_col]):
+        fmt_map[date_col] = lambda x: x.strftime("%d/%m/%Y") if pd.notna(x) else "—"
+
+    styled = fdf.style.format(fmt_map, na_rep="—") if fmt_map else fdf
+
     st.dataframe(
-        fdf, 
-        use_container_width=True, 
-        hide_index=True, 
+        styled,
+        use_container_width=True,
+        hide_index=True,
         height=500,
-        column_config=get_centralized_config(fdf)
+        column_config=get_centralized_config(fdf),
     )
 
     csv_bytes = fdf.to_csv(index=False, sep=";", encoding="utf-8-sig").encode()
