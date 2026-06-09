@@ -1604,6 +1604,61 @@ def _check_iframe_allowed(url: str) -> bool:
             return False   # conservador: não exibe iframe se não conseguir checar
 
 
+def _render_rss_homepage(source_name: str, items: list, site_url: str):
+    """Renderiza itens de RSS como uma 'homepage de revista': hero card
+    para a primeira matéria + grid de cards menores. Usado como fallback
+    quando reader proxy e proxy server-side falham — sempre funciona
+    porque depende apenas de RSS (sem iframe nem JS).
+    """
+    if not items:
+        return
+
+    hero = items[0]
+    rest = items[1:13]
+
+    hero_summary = (hero.get("summary") or "")[:240]
+    rest_html = ""
+    for it in rest:
+        title = (it.get("title") or "")[:140]
+        link  = it.get("link", "#")
+        summ  = (it.get("summary") or "")[:120]
+        rest_html += (
+            f'<div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:10px;'
+            f'padding:14px;box-shadow:0 1px 2px rgba(0,0,0,0.04);">'
+            f'<a href="{link}" target="_blank" rel="noopener" '
+            f'style="color:#0F172A;text-decoration:none;font-weight:700;font-size:13.5px;'
+            f'line-height:1.35;letter-spacing:-.01em;display:block;">{title}</a>'
+            + (f'<div style="color:#475569;font-size:12px;margin-top:6px;line-height:1.5;">{summ}</div>' if summ else "")
+            + f'</div>'
+        )
+
+    page = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<style>"
+        "body{font-family:'Plus Jakarta Sans',system-ui,-apple-system,sans-serif;"
+        "background:#F4F7F9;margin:0;padding:24px 28px;color:#0F172A;}"
+        ".hero{background:linear-gradient(135deg,#EFF6FF 0%,#FFFFFF 100%);"
+        "border:1px solid #DBEAFE;border-radius:14px;padding:28px 32px;margin-bottom:20px;"
+        "box-shadow:0 2px 8px rgba(37,99,235,0.06);}"
+        ".badge{display:inline-block;background:#2563EB;color:#FFFFFF;"
+        "font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;"
+        "padding:4px 10px;border-radius:6px;margin-bottom:14px;}"
+        ".hero h1{font-size:1.6em;margin:0 0 10px;letter-spacing:-.02em;color:#0F172A;line-height:1.25;}"
+        ".hero h1 a{color:inherit;text-decoration:none;}"
+        ".hero h1 a:hover{color:#2563EB;}"
+        ".hero p{color:#475569;font-size:14px;line-height:1.6;margin:0;}"
+        ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;}"
+        "</style></head><body>"
+        f"<div class='hero'><span class='badge'>{source_name} · DESTAQUE</span>"
+        f"<h1><a href='{hero.get('link','#')}' target='_blank' rel='noopener'>{(hero.get('title') or '')[:200]}</a></h1>"
+        + (f"<p>{hero_summary}</p>" if hero_summary else "")
+        + f"</div>"
+        f"<div class='grid'>{rest_html}</div>"
+        "</body></html>"
+    )
+    _components.html(page, height=760, scrolling=True)
+
+
 def render_noticias():
     # Sempre recarrega do disco para refletir novas fontes adicionadas
     # via _DEFAULT_NEWS em atualizações do código (ex: ESPN, GE).
@@ -1717,7 +1772,11 @@ def render_noticias():
     # ── MODO IFRAME (Site) ──────────────────────────────────────────
     if mode == "iframe":
         if site_strategy == "reader":
-            # Estratégia explícita: Jina Reader → fallback Wayback Machine iframe
+            # Cadeia robusta: Jina Reader → Proxy server-side → RSS magazine view
+            errs = []
+            shown = False
+
+            # 1. Jina Reader (real-time, conteúdo limpo)
             with st.spinner(f"Carregando {sel} via reader proxy…"):
                 html_content, err_r = _fetch_via_reader_proxy(site_url)
             if html_content:
@@ -1726,14 +1785,47 @@ def render_noticias():
                     f"links abrem em nova aba"
                 )
                 _components.html(html_content, height=760, scrolling=True)
+                shown = True
             else:
-                # Fallback automático: snapshot mais recente da Wayback Machine
-                wb = _wayback_iframe_url(site_url)
-                st.caption(
-                    f"📚 Reader proxy indisponível ({err_r}). "
-                    f"Exibindo snapshot mais recente da Wayback Machine."
+                errs.append(f"Jina: {err_r}")
+
+            # 2. Proxy server-side da home (re-escreve HTML)
+            if not shown:
+                with st.spinner(f"Tentando proxy server-side…"):
+                    html_content2, err_p = _fetch_site_html(site_url)
+                if html_content2 and len(html_content2) > 2000:
+                    st.caption(
+                        f"📡 Renderizado via proxy server-side  ·  X-Frame-Options contornado"
+                    )
+                    _components.html(html_content2, height=760, scrolling=True)
+                    shown = True
+                else:
+                    errs.append(f"Proxy: {err_p or 'conteúdo vazio'}")
+
+            # 3. Fallback final: RSS renderizado como "homepage de revista"
+            if not shown:
+                with st.spinner(f"Reader/proxy indisponíveis · montando visão RSS…"):
+                    items, err_rss = fetch_news_feed(
+                        src.get("rss_candidates", [src.get("rss", "")]),
+                        src.get("url", ""),
+                        src.get("allow_gn", True),
+                        max_items=20,
+                    )
+                if items:
+                    st.caption(
+                        f"📰 Reader e proxy falharam ({' · '.join(errs)}). "
+                        f"Exibindo as últimas {len(items)} matérias via RSS."
+                    )
+                    _render_rss_homepage(sel, items, site_url)
+                    shown = True
+
+            # 4. Tudo falhou
+            if not shown:
+                st.warning(
+                    f"**{sel}** indisponível em todas as estratégias. "
+                    f"Erros: {' · '.join(errs)}. "
+                    f"Tente o botão **📰 Artigos** ou abra [{site_url}]({site_url})."
                 )
-                _components.iframe(wb, height=760, scrolling=True)
         elif can_iframe:
             # Site permite embedding direto — iframe nativo
             _components.iframe(site_url, height=760, scrolling=True)
@@ -2393,8 +2485,13 @@ def render_cvm():
         except Exception:
             pass
 
-    # ── Coluna de tipo de ativo: Tipo_Ativo (exato) ──────────────────
-    tipo_col = _find_col(df, "Tipo_Ativo")
+    # ── Coluna do filtro "Tipo de ativo" — na verdade filtra Valor_Mobiliario ──
+    tipo_col = _find_col(df, "Valor_Mobiliario")
+
+    # ── Colunas dos filtros adicionais ───────────────────────────────
+    emissor_col = _find_col(df, "Nome_Emissor")
+    devedor_col = _find_col(df, "Identificacao_devedores_coobrigados")
+    coord_col   = _find_col(df, "Nome_Lider")
 
     # ── Colunas-padrão visíveis (na ordem solicitada) ────────────────
     default_cols_request = [
@@ -2461,7 +2558,30 @@ def render_cvm():
             sel_tipo = fc3.selectbox("Tipo de ativo", tipos, key="cvm_tipo")
         else:
             sel_tipo = None
-            fc3.caption("Coluna 'Tipo_Ativo' não encontrada no dataset.")
+            fc3.caption("Coluna 'Valor_Mobiliario' não encontrada no dataset.")
+
+        # ── Filtros adicionais: Emissor / Devedor / Coordenador Líder ──
+        ec1, ec2, ec3 = st.columns(3)
+        if emissor_col:
+            opts_em = ["Todos"] + sorted(df[emissor_col].dropna().astype(str).unique().tolist())
+            sel_emissor = ec1.selectbox("Emissor", opts_em, key="cvm_emissor")
+        else:
+            sel_emissor = None
+            ec1.caption("Coluna 'Nome_Emissor' ausente.")
+
+        if devedor_col:
+            opts_dv = ["Todos"] + sorted(df[devedor_col].dropna().astype(str).unique().tolist())
+            sel_devedor = ec2.selectbox("Devedor", opts_dv, key="cvm_devedor")
+        else:
+            sel_devedor = None
+            ec2.caption("Coluna 'Identificacao_devedores_coobrigados' ausente.")
+
+        if coord_col:
+            opts_cd = ["Todos"] + sorted(df[coord_col].dropna().astype(str).unique().tolist())
+            sel_coord = ec3.selectbox("Coordenador Lider", opts_cd, key="cvm_coord")
+        else:
+            sel_coord = None
+            ec3.caption("Coluna 'Nome_Lider' ausente.")
 
         all_cols = list(df.columns)
         sel_cols = st.multiselect(
@@ -2476,6 +2596,12 @@ def render_cvm():
         fdf = fdf[(fdf[date_col].dt.date >= from_d) & (fdf[date_col].dt.date <= to_d)]
     if tipo_col and sel_tipo and sel_tipo != "Todos":
         fdf = fdf[fdf[tipo_col].astype(str) == sel_tipo]
+    if emissor_col and sel_emissor and sel_emissor != "Todos":
+        fdf = fdf[fdf[emissor_col].astype(str) == sel_emissor]
+    if devedor_col and sel_devedor and sel_devedor != "Todos":
+        fdf = fdf[fdf[devedor_col].astype(str) == sel_devedor]
+    if coord_col and sel_coord and sel_coord != "Todos":
+        fdf = fdf[fdf[coord_col].astype(str) == sel_coord]
 
     # Ordena por Data_requerimento mais recente primeiro (antes de fatiar colunas)
     if date_col and date_col in fdf.columns:
