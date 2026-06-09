@@ -1146,7 +1146,7 @@ _DEFAULT_NEWS = [
          "https://www.espn.com/espn/rss/nfl/news",
          "https://www.espn.com/espn/rss/nba/news",
      ],
-     "url": "https://www.espn.com", "site_strategy": "reader",
+     "url": "https://www.espn.com",
      "allow_gn": True, "enabled": True},
 ]
 
@@ -1830,11 +1830,25 @@ def render_noticias():
             # Site permite embedding direto — iframe nativo
             _components.iframe(site_url, height=760, scrolling=True)
         else:
-            # Site bloqueia (X-Frame-Options/CSP) — busca server-side e renderiza inline
+            # Site bloqueia (X-Frame-Options/CSP) — cadeia: proxy → reader → RSS magazine
+            errs = []
+            shown = False
+
+            # 1. Proxy server-side (re-escreve HTML)
             with st.spinner(f"Carregando {sel} via proxy server-side…"):
                 html_content, err_p = _fetch_site_html(site_url)
-            # Fallback automático para reader proxy caso o HTML server-side falhe
-            if err_p or not html_content:
+            if html_content and len(html_content) > 2000:
+                st.caption(
+                    f"📡 Carregado via proxy server-side  ·  X-Frame-Options contornado  ·  "
+                    f"links abrem em nova aba"
+                )
+                _components.html(html_content, height=760, scrolling=True)
+                shown = True
+            else:
+                errs.append(f"Proxy: {err_p or 'conteúdo vazio'}")
+
+            # 2. Reader proxy (Jina)
+            if not shown:
                 with st.spinner(f"Tentando reader proxy…"):
                     html_content, err_r = _fetch_via_reader_proxy(site_url)
                 if html_content:
@@ -1843,17 +1857,34 @@ def render_noticias():
                         f"links abrem em nova aba"
                     )
                     _components.html(html_content, height=760, scrolling=True)
+                    shown = True
                 else:
-                    st.warning(
-                        f"**{sel}** bloqueia incorporação. Erro proxy: {err_p or '—'}. "
-                        f"Erro reader: {err_r or '—'}. Use **📰 Artigos** ou o link → nova aba."
+                    errs.append(f"Reader: {err_r}")
+
+            # 3. Fallback final: RSS magazine view (sempre funciona se há RSS)
+            if not shown:
+                with st.spinner(f"Montando visão RSS…"):
+                    items, err_rss = fetch_news_feed(
+                        src.get("rss_candidates", [src.get("rss", "")]),
+                        src.get("url", ""),
+                        src.get("allow_gn", True),
+                        max_items=20,
                     )
-            else:
-                st.caption(
-                    f"📡 Carregado via proxy server-side  ·  X-Frame-Options contornado  ·  "
-                    f"links abrem em nova aba"
+                if items:
+                    st.caption(
+                        f"📰 Proxy e reader falharam ({' · '.join(errs)}). "
+                        f"Exibindo as últimas {len(items)} matérias via RSS."
+                    )
+                    _render_rss_homepage(sel, items, site_url)
+                    shown = True
+
+            # 4. Tudo falhou
+            if not shown:
+                st.warning(
+                    f"**{sel}** indisponível em todas as estratégias. "
+                    f"Erros: {' · '.join(errs)}. "
+                    f"Tente o botão **📰 Artigos** ou abra [{site_url}]({site_url})."
                 )
-                _components.html(html_content, height=760, scrolling=True)
 
     # ── MODO ARTIGOS (RSS + scraper) ─────────────────────────────────
     else:
