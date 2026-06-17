@@ -119,12 +119,11 @@ hr { border-color: var(--border) !important; margin: 0rem 0 !important }
     background: var(--accentbg) !important; color: var(--accent) !important;
     box-shadow: 0 1px 3px rgba(0,0,0,.04) !important;
 }
-.stTabs [data-baseweb="tab-panel"] { padding-top: 1.5rem }
+.stTabs [data-baseweb="tab-panel"] { padding-top: 1.0rem }
 
 /* ── Separador visual (7ª aba) ── */
 .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(7) {
-    font-size: 70%;
-    pointer-events: none !important; cursor: default !important;
+    pointer-events: none !important; cursor: default !important; gap: 2px;
     color: var(--text3) !important; background: transparent !important;
     box-shadow: none !important; padding: 8px 10px !important;
     font-size: 10px !important; font-weight: 600 !important; letter-spacing: .06em !important;
@@ -135,8 +134,8 @@ hr { border-color: var(--border) !important; margin: 0rem 0 !important }
     background: transparent !important; color: var(--border2) !important; box-shadow: none !important;
 }
 /* Abas auxiliares (a partir da 7ª posição) — fonte reduzida */
-.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(n+7) {
-    font-size: 70%;
+.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(n+7) p{
+    font-size: 11px !important;
 }
 
 /* ── Buttons ── */
@@ -326,19 +325,26 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
 .cr-feed { padding:4px 0 }
 .cr-fitem { display:flex; gap:12px; padding:9px 18px; border-bottom:1px solid var(--border); align-items:baseline }
 .cr-fitem:last-child { border-bottom:none }
-.cr-fitem .ag { font-size:9.5px; font-weight:800; letter-spacing:.06em; min-width:62px; color:#7C3AED }
-.cr-fitem .tx { font-size:12px; color:var(--text1); line-height:1.4 }
+.cr-fitem .ag { font-size:14px; font-weight:800; letter-spacing:.06em; min-width:62px; color:#7C3AED;text-align:center }
+.cr-fitem .tx { font-size:14px; color:var(--text1); line-height:1.4 }
 .cr-fitem .tx small { color:var(--text3); display:block; font-size:10.5px; margin-top:1px }
 .cr-up-ar { color:var(--green); font-weight:700 } .cr-dn-ar { color:var(--red); font-weight:700 }
 .cr-hint { font-size:11px; color:var(--text3); padding:9px 18px; background:var(--surf2); border-top:1px solid var(--border) }
 
-.briefing-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:16px }
+.briefing-grid { display:grid; grid-template-columns:1.08fr 1fr 1fr; gap:12px; margin-bottom:16px }
 .briefing-card { background:var(--surf); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow) }
 .briefing-card h4 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text3); margin:0 0 10px }
 .briefing-row { display:flex; justify-content:space-between; align-items:baseline; padding:3px 0; border-bottom:1px solid var(--border) }
 .briefing-row:last-child { border-bottom:none }
-.briefing-row .nm { font-size:12px; color:var(--text1); font-weight:600 }
-.briefing-row .dl { font-family:'JetBrains Mono',monospace; font-size:11.5px }
+.briefing-row .nm { font-size:12px; color:var(--text1); font-weight:600; width: 65%; /* <--- FIXE O TAMANHO DA "COLUNA" ESQUERDA AQUI */
+    white-space: nowrap; 
+    overflow: hidden; 
+    /*text-overflow: ellipsis;  <-- Adiciona '...' se o nome do emissor for muito grande */
+}
+.briefing-row .dl { font-family:'JetBrains Mono',monospace; font-size:11.5px; width: 35%; /* <--- FIXE O TAMANHO DA "COLUNA" DIREITA AQUI */
+	text-align: right;
+
+}
 .briefing-fallback { font-size:11.5px; color:var(--text3); font-style:italic; padding:6px 0 }
 .briefing-synth { background:var(--amberbg); border:1px solid #FCD34D; border-radius:var(--radius-sm); padding:9px 14px; margin-bottom:12px; margin-top:10px; font-size:12.5px; color:var(--amber); line-height:1.5 }
 @media (max-width: 560px) {
@@ -1281,8 +1287,8 @@ def render_conteudo_dinamico(current_calls):
         "Auxiliares ————›",
         "Runs corretora",
         "Calls NTN-B",
-        "📊 Curva DI",
-        "📊 NTN-B ANBIMA",
+        "FRA",
+        "NTN-B ANBIMA",
     ])
     with tabs[0]: render_principal(di_data, anbima_df, current_calls, ajuste_locked, prev_bday_ajuste)
     with tabs[1]: render_cvm()
@@ -1308,7 +1314,7 @@ def render_principal(di, anbima, calls, ajuste_locked, prev_bday_ajuste=None):
 
     render_briefing_credito(anbima)
 
-    col_di, _, col_ntnb, col_btn = st.columns([1, 0.04, 1.4, 0.4])
+    col_di, col_ntnb, col_btn = st.columns([0.94, 1.34, 0.4])
 
     with col_btn:
         st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
@@ -3467,17 +3473,11 @@ def render_runs(anbima_df):
 
 def render_credito(anbima_df):
     """Aba Crédito — spreads secundário, runs e radar micro de lastros."""
-    st.markdown(
-        '<p class="mon-sub">Spreads de secundário, watchlist FIDC e radar micro de lastros. '
-        'Radar micro puxa BCB SGS ao vivo; demais seções alimentadas pelos seus runs e ANBIMA.</p>',
-        unsafe_allow_html=True,
-    )
-
     _cr_agenda()
     _cr_kpis()
     _cr_top_movers()
 
-    col_radar, col_rating = st.columns([1.45, 1], gap="medium")
+    col_radar, col_rating = st.columns([1.45, 1], gap="small")
     with col_radar:
         _cr_radar_micro_card()
     with col_rating:
@@ -3569,7 +3569,7 @@ def _cr_agenda():
     st.markdown(
         f'<p class="mon-head" style="margin:8px 0 4px">Agenda macro '
         f'<span class="table-card-meta" style="color:var(--green)">'
-        f'BCB · inflação · atividade · 2026</span></p>'
+        f'</span></p>'
         f'<div class="cr-agstrip">{items}</div>',
         unsafe_allow_html=True,
     )
@@ -3644,7 +3644,7 @@ def _cr_kpis():
 
     src_parts = []
     if cdi_src == "calls" or ipca_src == "calls":
-        src_parts.append("seus runs")
+        src_parts.append("Calls: Ativa")
     if cdi_src == "anbima" or ipca_src == "anbima":
         src_parts.append(f"ANBIMA db{ymd}" if ymd else "ANBIMA")
     src = " + ".join(src_parts) if src_parts else "—"
@@ -3691,11 +3691,11 @@ def _cr_kpis():
     cards = (
         _cr_kpi_card("Deb CDI+ · indicativa méd", cdi_txt or "—", cdi_sub, real=cdi_txt is not None)
         + _cr_kpi_card(ipca_label, ipca_txt or "—", ipca_sub, real=ipca_txt is not None)
-        + _cr_kpi_card("Prêmio s/ ANBIMA · seus runs", prem_val, prem_sub, real=prem_real)
+        + _cr_kpi_card("Spread médio over ANBIMA", prem_val, prem_sub, real=prem_real)
         + mv_card_html
     )
     st.markdown(
-        f'<p class="mon-head" style="margin:8px 0 4px">Destaques de crédito '
+        f'<p class="mon-head" style="margin:8px 0 4px">Briefing do Secundário '
         f'<span class="table-card-meta" style="color:var(--green)">{src}</span></p>'
         f'<div class="cr-kpis">{cards}</div>',
         unsafe_allow_html=True,
@@ -3874,26 +3874,34 @@ def _cr_radar_micro_card():
     for r in radar:
         if r["valor"] is None:
             body += (f'<tr><td class="ticker" style="text-align:left">{r["label"]}</td>'
-                     f'<td colspan="2" class="dur" style="font-size:11px">indisponível</td></tr>')
+                     f'<td colspan="3" class="dur" style="font-size:11px">indisponível</td></tr>')
             continue
         val = f'{fr(r["valor"], r["dec"])}{r["suf"]}'
         if r["delta"] is None:
             dhtml = '<span class="cr-chip fl">—</span>'
         else:
             sgn = "+" if r["delta"] > 0 else ""
-            cls = "dn" if r["delta"] > 0 else ("up" if r["delta"] < 0 else "fl")
+            cls = "up" if r["delta"] > 0 else ("dn" if r["delta"] < 0 else "fl")
             dhtml = f'<span class="cr-chip {cls}">{sgn}{fr(r["delta"], r["dec"])} pp</span>'
+        # Coluna 12 meses
+        v12 = r.get("valor_12m")
+        if v12 is None:
+            m12_html = '<span style="color:var(--text3)">—</span>'
+        else:
+            m12_html = f'{fr(v12, r["dec"])}{r["suf"]}'
         ref = f' · {r["data"]}' if r.get("data") else ""
         body += (f'<tr><td class="ticker" style="text-align:left">{r["label"]}'
                  f'<small style="color:var(--text3);font-weight:400">{ref}</small></td>'
-                 f'<td class="hi">{val}</td><td>{dhtml}</td></tr>')
+                 f'<td class="hi">{val}</td><td>{dhtml}</td>'
+                 f'<td class="rate">{m12_html}</td></tr>')
     st.markdown(
         _cr_card_open("Radar micro — lastros",
                       '<span class="table-card-meta" style="color:var(--green)">BCB SGS · real</span>')
         + '<table class="mon-table"><thead><tr>'
-          '<th class="left">Indicador</th><th>Último</th><th>Δ período</th>'
+          '<th class="left">Indicador</th><th>Último</th><th>Δ período</th><th>12 meses</th>'
           f'</tr></thead><tbody>{body}</tbody></table>'
           '<div class="cr-hint">Inadimplência por modalidade + índices, direto da API do BCB (cache 1h). '
+          '12m = acumulado (índices) ou valor de 1 ano atrás (inadimplência). '
           'Commodities CEPEA (soja/milho/boi) entram quando a fonte for conectada.</div></div>',
         unsafe_allow_html=True,
     )
@@ -3901,36 +3909,124 @@ def _cr_radar_micro_card():
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def _fetch_rating_news():
-    if not HAS_FEEDPARSER:
-        return [], "feedparser não instalado"
-    gn = (
-        "https://news.google.com/rss/search?q="
-        "rating+%22S%26P%22+OR+%22Fitch%22+OR+%22Moody%27s%22+"
-        "deb%C3%AAnture+OR+CRI+OR+CRA+brasil"
-        "&hl=pt-BR&gl=BR&ceid=BR:pt-419"
-    )
-    try:
-        feed = _feedparser.parse(gn)
-        items = []
-        for e in feed.entries[:6]:
-            title = e.get("title", "").strip()
-            link  = e.get("link", "")
-            src_n = (e.get("source") or {}).get("title", "")
-            if title:
-                items.append({"title": title, "link": link, "source": src_n})
-        AGENCIAS = ("S&P", "Fitch", "Moody's", "Moody", "Standard & Poor")
-        items = [
-            it for it in items
-            if any(ag in it.get("title", "") or ag in it.get("source", "")
-                   for ag in AGENCIAS)
-        ]
-        return items, None
-    except Exception as ex:
-        return [], str(ex)
+    """Busca ações de rating de S&P (scraping HTML direto), Moody's e Fitch (Google News filtrado).
+    
+    S&P brazil.ratings.spglobal.com retorna HTML estático com a tabela de ações.
+    Moody's (moodyslocal.com.br) e Fitch retornam 403 via Cloudflare/egress block —
+    para essas duas agências usamos Google News com query específica por agência.
+    """
+    import urllib3; urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    items = []
+
+    # ── 1. S&P Global Ratings Brasil — scraping HTML direto ─────
+    # A página retorna tabela HTML estática com CSS class ratingsActions-table-module__row.
+    # Cols: 0=emissor, 1=classe, 2=vencto, 3=tipo-rating, 4=data-ação,
+    #       5=rating-novo(Para), 6=cw-novo, 7=rating-ant(De), 8=cw-ant, 9=tipo-ação
+    if HAS_BS4:
+        try:
+            _SP_URL = "https://brazil.ratings.spglobal.com/ratings/pt/regulatory/ratings-actions"
+            _SP_BASE = "https://brazil.ratings.spglobal.com"
+            r = requests.get(_SP_URL, timeout=20, headers=_BROWSER_HEADERS, verify=False)
+            if r.status_code == 200 and r.content:
+                soup = _BS(r.content, "lxml")
+                rows = soup.select(".ratingsActions-table-module__row")
+                seen_entities = set()
+                for row in rows:
+                    cols = row.select(".ratingsActions-table-module__column")
+                    if len(cols) < 6:
+                        continue
+                    entity = cols[0].get_text(separator=" ", strip=True)
+                    if not entity or len(entity) < 5:
+                        continue
+                    # Deduplica emissores com múltiplas classes (ex.: várias cotas do mesmo FIDC)
+                    entity_key = entity[:40]
+                    if entity_key in seen_entities:
+                        continue
+                    seen_entities.add(entity_key)
+                    link_tag = cols[0].find("a")
+                    href = (_SP_BASE + link_tag.get("href", "")) if link_tag else _SP_URL
+                    acao     = cols[9].get_text(strip=True) if len(cols) > 9 else ""
+                    rat_novo = cols[5].get_text(strip=True) if len(cols) > 5 else ""
+                    rat_ant  = cols[7].get_text(strip=True) if len(cols) > 7 else ""
+                    data_ac  = cols[4].get_text(strip=True) if len(cols) > 4 else ""
+                    # Monta título legível: [Ação] Emissor → Rating novo (era Rating ant)
+                    titulo = f"[{acao}] {entity[:70]}"
+                    if rat_novo:
+                        titulo += f" → {rat_novo}"
+                    if rat_ant and rat_ant not in (acao, rat_novo, "De", "Para"):
+                        titulo += f" (era {rat_ant})"
+                    items.append({
+                        "title": titulo[:160],
+                        "link": href,
+                        "source": "S&P",
+                        "data": data_ac,
+                    })
+                    if len(items) >= 5:
+                        break
+        except Exception:
+            pass  # falha silenciosa; complementado pelo bloco GN abaixo
+
+    # ── 2. Moody's Local — Google News por agência ───────────────
+    # moodyslocal.com.br retorna 403 Cloudflare para requests diretos.
+    if HAS_FEEDPARSER:
+        try:
+            _GN_MOODY = (
+                "https://news.google.com/rss/search?q="
+                "%22Moody%27s%22+rating+brasil"
+                "+debenture+OR+CRI+OR+CRA+OR+rebaixa+OR+afirma+OR+eleva"
+                "&hl=pt-BR&gl=BR&ceid=BR:pt-419"
+            )
+            feed = _feedparser.parse(_GN_MOODY)
+            _MOODY_KEYS = ("moody", "moody's")
+            for e in feed.entries[:8]:
+                title = e.get("title", "").strip()
+                src_n = (e.get("source") or {}).get("title", "") or ""
+                title_l = title.lower()
+                if title and any(k in title_l or k in src_n.lower() for k in _MOODY_KEYS):
+                    items.append({
+                        "title": title[:160],
+                        "link": e.get("link", ""),
+                        "source": "Moody's",
+                    })
+            # Limita a 4 itens de Moody's
+            items = [it for it in items if it["source"] != "Moody's"] + \
+                    [it for it in items if it["source"] == "Moody's"][:4]
+        except Exception:
+            pass
+
+    # ── 3. Fitch Ratings — Google News por agência ───────────────
+    # fitchratings.com retorna 403 egress block no ambiente Streamlit Cloud.
+    if HAS_FEEDPARSER:
+        try:
+            _GN_FITCH = (
+                "https://news.google.com/rss/search?q="
+                "%22Fitch%22+rating+brasil"
+                "+debenture+OR+CRI+OR+CRA+OR+rebaixa+OR+afirma+OR+eleva"
+                "&hl=pt-BR&gl=BR&ceid=BR:pt-419"
+            )
+            feed = _feedparser.parse(_GN_FITCH)
+            _FITCH_KEYS = ("fitch",)
+            fitch_added = 0
+            for e in feed.entries[:8]:
+                if fitch_added >= 4:
+                    break
+                title = e.get("title", "").strip()
+                src_n = (e.get("source") or {}).get("title", "") or ""
+                if title and any(k in title.lower() or k in src_n.lower() for k in _FITCH_KEYS):
+                    items.append({
+                        "title": title[:160],
+                        "link": e.get("link", ""),
+                        "source": "Fitch",
+                    })
+                    fitch_added += 1
+        except Exception:
+            pass
+
+    return items[:12], None
 
 
 def _cr_rating_actions():
-    """Ações de rating & fatos relevantes — Google News (cache 30 min)."""
+    """Ações de rating & fatos relevantes — Moody's Local, S&P Brazil, Fitch + GN (cache 30 min)."""
     items, err = _fetch_rating_news()
     if items:
         feed_html = ""
@@ -3944,17 +4040,17 @@ def _cr_rating_actions():
             )
         st.markdown(
             _cr_card_open("Ações de rating &amp; fatos relevantes",
-                          '<span class="table-card-meta" style="color:var(--green)">Google News · real</span>')
+                          '<span class="table-card-meta" style="color:var(--green)">Moody\'s · S&amp;P · Fitch</span>')
             + f'<div class="cr-feed">{feed_html}</div></div>',
             unsafe_allow_html=True,
         )
     else:
         st.markdown(
             _cr_card_open("Ações de rating &amp; fatos relevantes",
-                          '<span class="table-card-meta">Google News</span>')
+                          '<span class="table-card-meta">Moody\'s · S&amp;P · Fitch</span>')
             + '<div class="cr-feed"><div class="cr-fitem">'
             + '<span class="tx" style="color:var(--text3)">'
-            + (err or "Nenhuma notícia de S&P / Fitch / Moody's no momento.")
+            + (err or "Nenhuma ação de rating disponível no momento.")
             + '</span></div></div></div>',
             unsafe_allow_html=True,
         )
@@ -3968,7 +4064,7 @@ def _cr_top_movers():
 
     st.markdown(
         '<p class="mon-head" style="margin:16px 0 6px">Top movers D/D '
-        '<span class="table-card-meta" style="color:var(--green)">seus runs · real</span></p>',
+        '<span class="table-card-meta" style="color:var(--green)">Fonte: Call Ativa</span></p>',
         unsafe_allow_html=True,
     )
 
@@ -4066,21 +4162,46 @@ def fetch_sgs_series(sid: int, n: int = 2):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_radar_micro():
-    """Coleta todas as séries do radar. Retorna lista de dicts com último valor e Δ."""
+    """Coleta todas as séries do radar. Retorna lista de dicts com último valor, Δ e acumulado 12m."""
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    # Séries com acumulado via soma (indexadores mensais)
+    _ACUM_SOMA = {433, 189, 192}   # IPCA, IGP-M, INCC
+    # Série com acumulado via produto (Selic mensal)
+    _ACUM_PROD = {4390}
+    # Séries de inadimplência: exibe valor de 1 ano atrás
+    _INAD = {21082, 21084, 21112, 20768}
     rows = []
     for sid, label, grupo, dec, suf in _SGS_SERIES:
-        pts, err = fetch_sgs_series(sid, 2)
+        pts, err = fetch_sgs_series(sid, 14)  # 14 pontos → ~12m de lookback
         if not pts:
             rows.append({"label": label, "grupo": grupo, "valor": None,
-                         "delta": None, "data": None, "dec": dec, "suf": suf, "err": err})
+                         "delta": None, "valor_12m": None, "data": None,
+                         "dec": dec, "suf": suf, "err": err})
             continue
         ultimo = pts[-1]
         delta = (ultimo["valor"] - pts[-2]["valor"]) if len(pts) >= 2 else None
+        # Cálculo do valor 12m
+        valor_12m = None
+        if sid in _INAD:
+            # Valor de aproximadamente 1 ano atrás (13 meses antes do mais recente)
+            if len(pts) >= 13:
+                valor_12m = pts[-13]["valor"]
+        elif sid in _ACUM_SOMA:
+            # Acumulado 12 meses = soma dos últimos 12 valores mensais
+            if len(pts) >= 12:
+                valor_12m = sum(p["valor"] for p in pts[-12:])
+        elif sid in _ACUM_PROD:
+            # Acumulado Selic = produto composto dos últimos 12 valores mensais
+            if len(pts) >= 12:
+                acc = 1.0
+                for p in pts[-12:]:
+                    acc *= (1 + p["valor"] / 100)
+                valor_12m = (acc - 1) * 100
         rows.append({
             "label": label, "grupo": grupo,
             "valor": ultimo["valor"], "delta": delta, "data": ultimo["data"],
+            "valor_12m": valor_12m,
             "dec": dec, "suf": suf, "err": None,
         })
     return rows
@@ -4316,7 +4437,7 @@ def render_cvm():
     devedor_col = _find_col(df, "Identificacao_devedores_coobrigados")
     coord_col   = _find_col(df, "Nome_Lider")
     default_cols_request = [
-        "Data_requerimento", "Status_requerimento", "Valor_Mobiliario", "Nome_Emissor",
+        "Data_requerimento", "Valor_Mobiliario", "Nome_Emissor",
         "Identificacao_devedores_coobrigados", "Nome_Lider", "Valor_Total_Registrado",
         "Destinacao_recursos", "Descricao_garantias",
     ]
@@ -4356,7 +4477,7 @@ def render_cvm():
             status_opts += sorted(df["Status_Requerimento"].dropna().unique().tolist())
         sel_status = fc4.selectbox("Status", status_opts, key="cvm_status")
 
-        fc5, fc6 = st.columns(2)
+        fc5, fc6, fc8 = st.columns(3)
         publico_opts = ["Todos"]
         if "Publico_alvo" in df.columns:
             publico_opts += sorted(df["Publico_alvo"].dropna().unique().tolist())
@@ -4366,13 +4487,13 @@ def render_cvm():
         if "Tipo_lastro" in df.columns:
             lastro_opts += sorted(df["Tipo_lastro"].dropna().unique().tolist())
         sel_lastro = fc6.selectbox("Lastro", lastro_opts, key="cvm_lastro")
-
-        fc8, fc9, fc10, fc11 = st.columns(4)
+        
         rating_opts = ["Todos"]
         if "Avaliador_Risco" in df.columns:
             rating_opts += sorted(df["Avaliador_Risco"].dropna().unique().tolist())
         sel_rating = fc8.selectbox("Agência rating", rating_opts, key="cvm_rating")
-
+	
+        fc9, fc10, fc11 = st.columns(3)
         book_opts = ["Todos"]
         if "Bookbuilding" in df.columns:
             book_opts += sorted(df["Bookbuilding"].dropna().astype(str).unique().tolist())
@@ -4589,12 +4710,17 @@ def render_briefing_credito(anbima_df):
             novas = df_sre.head(10).copy()
         data_txt = f"{_d1.strftime('%d/%m')}–{_d0.strftime('%d/%m')}"
 
+        # Filtra só instrumentos DCM relevantes (Debênture, CRI, CRA, Nota Comercial)
+        _TIPOS_BRIEFING = {"Debênture", "CRI", "CRA", "Nota Comercial"}
+        if tipo_col and tipo_col in novas.columns:
+            novas = novas[novas[tipo_col].isin(_TIPOS_BRIEFING)]
+
         # Pipeline por segmento (mantém para a síntese)
         pipeline = _sre_pipeline_por_segmento(df_sre)
 
         rows_html = ""
         for _, r in novas.head(5).iterrows():
-            emissor = (str(r[emis_col]) if emis_col and pd.notna(r.get(emis_col)) else "—")[:28]
+            emissor = (str(r[emis_col]) if emis_col and pd.notna(r.get(emis_col)) else "—")[:40]
             tipo    = str(r[tipo_col]) if tipo_col and pd.notna(r.get(tipo_col)) else "—"
             vol_raw = r.get(vol_col) if vol_col else None
             vol_txt = (f"R$ {vol_raw/1e6:.0f}M" if pd.notna(vol_raw) and vol_raw else "—")
@@ -4682,7 +4808,7 @@ def render_briefing_credito(anbima_df):
                     mid = venda
                 else:
                     mid = None
-                taxa = f"{idx} + {fr(mid, 2)}%" if mid is not None else "—"
+                taxa = f"{idx}{fr(mid, 2)}%" if mid is not None else "—"
                 d    = r["delta"]
                 rows += (
                     f'<div class="briefing-row">'
@@ -4735,8 +4861,7 @@ def render_briefing_credito(anbima_df):
                     pct_html = f'<span style="color:var(--text3);font-size:10.5px;font-weight:600">p{pct}</span>'
                 rows += (
                     f'<div class="briefing-row">'
-                    f'<span class="nm">{lbl}</span>'
-                    f'<span class="dl">{pct_html}'
+                    f'<span class="nm">{lbl}'
                     f'&nbsp;<span class="cr-chip {cls}">{sign}{delta:.1f}</span>'
                     f'</span></div>'
                 )
@@ -4762,7 +4887,7 @@ def render_briefing_credito(anbima_df):
 
     st.markdown(
         f'<div class="briefing-grid">'
-        f'<div class="briefing-card"><h4>Spreads abrindo D/D</h4>{html_b1}</div>'
+        f'<div class="briefing-card"><h4>Spreads D/D</h4>{html_b1}</div>'
         f'<div class="briefing-card"><h4>ANBIMA — mov. D/D</h4>{html_b2}</div>'
         f'<div class="briefing-card"><h4>{sre_titulo}</h4>{html_b3}</div>'
         f'</div>',
