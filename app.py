@@ -336,12 +336,12 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
 .briefing-card h4 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text3); margin:0 0 10px }
 .briefing-row { display:flex; justify-content:space-between; align-items:baseline; padding:3px 0; border-bottom:1px solid var(--border) }
 .briefing-row:last-child { border-bottom:none }
-.briefing-row .nm { font-size:12px; color:var(--text1); font-weight:600; width: 50%; /* <--- FIXE O TAMANHO DA "COLUNA" ESQUERDA AQUI */
+.briefing-row .nm { font-size:12px; color:var(--text1); font-weight:600; width: 65%; /* <--- FIXE O TAMANHO DA "COLUNA" ESQUERDA AQUI */
     white-space: nowrap; 
     overflow: hidden; 
     /*text-overflow: ellipsis;  <-- Adiciona '...' se o nome do emissor for muito grande */
 }
-.briefing-row .dl { font-family:'JetBrains Mono',monospace; font-size:11.5px; width: 50%; /* <--- FIXE O TAMANHO DA "COLUNA" DIREITA AQUI */
+.briefing-row .dl { font-family:'JetBrains Mono',monospace; font-size:11.5px; width: 35%; /* <--- FIXE O TAMANHO DA "COLUNA" DIREITA AQUI */
 	text-align: right;
 
 }
@@ -4813,8 +4813,8 @@ def render_briefing_credito(anbima_df):
                 rows += (
                     f'<div class="briefing-row">'
                     f'<span class="nm">{r["ativo"]}</span>'
-                    f'<span class="dl">'
                     f'<span style="font-size:10.5px;color:var(--text3)">{taxa}</span>'
+                    f'<span class="dl">'
                     f'&nbsp;<span class="cr-chip {chip_cls}">{d:+.0f} bps</span>'
                     f'</span></div>'
                 )
