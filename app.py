@@ -4814,7 +4814,7 @@ def render_briefing_credito(anbima_df):
                     f'<div class="briefing-row">'
                     f'<span class="nm">{r["ativo"]}&emsp;<span style="font-size:10.5px;color:var(--text3)">{taxa}</span>'
                     f'<span class="dl">'
-                    f'&nbsp;<span class="cr-chip {chip_cls}">{d:+.0f} bps</span>'
+                    f'<span class="cr-chip {chip_cls}">{d:+.0f} bps</span>'
                     f'</span></div>'
                 )
             return rows or '<span style="color:var(--text3);font-size:11px">—</span>'
