@@ -3674,17 +3674,24 @@ def _cr_kpis():
         fe = allm.sort_values("delta_bps").iloc[0]
         ab_txt = f"{ab['ativo']} {ab['delta_bps']:+.0f} bps".replace("-", "−")
         fe_txt = f"{fe['ativo']} {fe['delta_bps']:+.0f} bps".replace("-", "−")
-        mv_val  = f"↑ {ab_txt}"
-        mv_sub  = f"↓ {fe_txt}"
-        mv_real = True
+        mv_card_html = (
+            f'<div class="cr-kpi">'
+            f'<div class="l">Mov. D/D · abertura / fechamento</div>'
+            f'<div style="display:flex;flex-direction:column;gap:5px;margin-top:6px">'
+            f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:13px;'
+            f'font-weight:600;color:var(--red)">↑ {ab_txt}</div>'
+            f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:13px;'
+            f'font-weight:600;color:var(--green)">↓ {fe_txt}</div>'
+            f'</div></div>'
+        )
     else:
-        mv_val, mv_sub, mv_real = "—", "precisa 2 runs", False
+        mv_card_html = _cr_kpi_card("Mov. D/D", "—", "precisa 2 runs", real=False)
 
     cards = (
         _cr_kpi_card("Deb CDI+ · indicativa méd", cdi_txt or "—", cdi_sub, real=cdi_txt is not None)
         + _cr_kpi_card(ipca_label, ipca_txt or "—", ipca_sub, real=ipca_txt is not None)
         + _cr_kpi_card("Prêmio s/ ANBIMA · seus runs", prem_val, prem_sub, real=prem_real)
-        + _cr_kpi_card("Mov. D/D · maior abertura", mv_val, mv_sub, real=mv_real)
+        + mv_card_html
     )
     st.markdown(
         f'<p class="mon-head" style="margin:8px 0 4px">Destaques de crédito '
@@ -3895,8 +3902,12 @@ def _cr_radar_micro_card():
 def _fetch_rating_news():
     if not HAS_FEEDPARSER:
         return [], "feedparser não instalado"
-    gn = ("https://news.google.com/rss/search?q=rating+rebaixamento+eleva%C3%A7%C3%A3o+"
-          "deb%C3%AAnture+CRI+CRA+brasil&hl=pt-BR&gl=BR&ceid=BR:pt-419")
+    gn = (
+        "https://news.google.com/rss/search?q="
+        "rating+%22S%26P%22+OR+%22Fitch%22+OR+%22Moody%27s%22+"
+        "deb%C3%AAnture+OR+CRI+OR+CRA+brasil"
+        "&hl=pt-BR&gl=BR&ceid=BR:pt-419"
+    )
     try:
         feed = _feedparser.parse(gn)
         items = []
@@ -3906,8 +3917,12 @@ def _fetch_rating_news():
             src_n = (e.get("source") or {}).get("title", "")
             if title:
                 items.append({"title": title, "link": link, "source": src_n})
-        AGENCIAS = ("S&P", "Fitch", "Moody's", "Moody")
-        items = [it for it in items if any(ag in it["title"] for ag in AGENCIAS)]
+        AGENCIAS = ("S&P", "Fitch", "Moody's", "Moody", "Standard & Poor")
+        items = [
+            it for it in items
+            if any(ag in it.get("title", "") or ag in it.get("source", "")
+                   for ag in AGENCIAS)
+        ]
         return items, None
     except Exception as ex:
         return [], str(ex)
@@ -3934,9 +3949,12 @@ def _cr_rating_actions():
         )
     else:
         st.markdown(
-            _cr_card_open("Ações de rating &amp; fatos relevantes", _CR_ILLUS)
-            + f'<div class="cr-feed"><div class="cr-fitem"><span class="tx" style="color:var(--text3)">'
-              f'{err or "Google News indisponível"}</span></div></div></div>',
+            _cr_card_open("Ações de rating &amp; fatos relevantes",
+                          '<span class="table-card-meta">Google News</span>')
+            + '<div class="cr-feed"><div class="cr-fitem">'
+            + '<span class="tx" style="color:var(--text3)">'
+            + (err or "Nenhuma notícia de S&P / Fitch / Moody's no momento.")
+            + '</span></div></div></div>',
             unsafe_allow_html=True,
         )
 
@@ -4417,14 +4435,11 @@ def render_cvm():
         fdf = fdf[fdf[coord_col].astype(str) == sel_coord]
 
     # ── KPIs + Distribuição: sempre D-1 (ontem) até D0 (hoje) ──
-    from datetime import timedelta as _td
-    _hoje = _brt_date()
-    _ontem = _hoje - _td(days=1)
+    _hoje_cvm  = pd.Timestamp(_brt_date()).normalize()
+    _ontem_cvm = _hoje_cvm - pd.Timedelta(days=1)
     if date_col:
-        fdf_kpi = df[
-            (df[date_col].dt.date >= _ontem) &
-            (df[date_col].dt.date <= _hoje)
-        ].copy()
+        _col_dt = pd.to_datetime(df[date_col], errors="coerce").dt.normalize()
+        fdf_kpi = df[(_col_dt >= _ontem_cvm) & (_col_dt <= _hoje_cvm)].copy()
     else:
         fdf_kpi = df.copy()
 
@@ -4495,7 +4510,7 @@ def render_cvm():
                      f'<td class="rate">{_fmt_bi(r["vol"])}</td></tr>')
         render_table(
             [("Tipo", "left"), ("Ofertas", ""), ("Volume", "")],
-            rows, title="Distribuição por tipo", meta=f"D-1/D0 · {_ontem:%d/%m} – {_hoje:%d/%m}",
+            rows, title="Distribuição por tipo", meta=f"D-1/D0 · {_ontem_cvm.strftime('%d/%m')} – {_hoje_cvm.strftime('%d/%m')}",
         )
 
 
@@ -4529,8 +4544,9 @@ def render_briefing_credito(anbima_df):
         all_fe = pd.concat(frames_fe).sort_values("_abs", ascending=False)
         all_ab = all_ab[all_ab["_abs"] >= limiar]
         all_fe = all_fe[all_fe["_abs"] >= limiar]
-        top5   = all_ab.head(5)
-        return top5, len(all_ab), len(all_fe)
+        ab = all_ab.head(5)
+        fe = all_fe.head(5)
+        return (ab, fe), len(all_ab), len(all_fe)
 
     # ── Bloco 2: ANBIMA D/D ────────────────────────────────────
     def _bloco_anbima():
@@ -4561,13 +4577,16 @@ def render_briefing_credito(anbima_df):
         emis_col = _find_col(df_sre, "Nome_Emissor")
         vol_col  = _find_col(df_sre, "Valor_Total_Registrado")
 
-        # Último dia disponível
+        # D-1 até D0
+        _d0 = pd.Timestamp(_brt_date())
+        _d1 = _d0 - pd.Timedelta(days=1)
         if date_col:
-            ultima_data = df_sre[date_col].max()
-            novas = df_sre[df_sre[date_col] == ultima_data].copy()
+            novas = df_sre[
+                (df_sre[date_col] >= _d1) & (df_sre[date_col] <= _d0)
+            ].copy()
         else:
-            ultima_data = None
             novas = df_sre.head(10).copy()
+        data_txt = f"{_d1.strftime('%d/%m')}–{_d0.strftime('%d/%m')}"
 
         # Pipeline por segmento (mantém para a síntese)
         pipeline = _sre_pipeline_por_segmento(df_sre)
@@ -4587,37 +4606,13 @@ def render_briefing_credito(anbima_df):
                 f'</div>'
             )
         if not rows_html:
-            rows_html = '<span style="color:var(--text3);font-size:12px">sem ofertas hoje</span>'
+            rows_html = '<span style="color:var(--text3);font-size:12px">sem ofertas no período</span>'
 
-        data_txt = ultima_data.strftime("%d/%m") if date_col and pd.notna(ultima_data) else "—"
         return rows_html, pipeline, None, data_txt
 
     top3_spreads, n_ab, n_fe = _bloco_spreads()
     top3_anbima  = _bloco_anbima()
     novas_html, pipeline_sre, sre_err, sre_data = _bloco_sre()
-
-    # ── Síntese: cruzamento run↔SRE por segmento ──────────────────
-    _pipeline    = pipeline_sre or {}
-    segs_pesados = {s for s, v in _pipeline.items() if v.get("pesado")}
-
-    cruzamentos = []
-    for _rt in ("CDI", "IPCA"):
-        relevantes = _segmentos_sre_relevantes(_rt)
-        overlap    = relevantes & segs_pesados
-        if overlap:
-            label_run = "CDI+" if _rt == "CDI" else "IPCA+"
-            nomes     = ", ".join(sorted(overlap))
-            cruzamentos.append(
-                f"Runs <b>{label_run}</b> abrindo · oferta pesada em <b>{nomes}</b> "
-                f"→ movimento provavelmente técnico (supply)"
-            )
-
-    if cruzamentos:
-        for txt in cruzamentos:
-            st.markdown(
-                f'<div class="briefing-synth">⚡ {txt}</div>',
-                unsafe_allow_html=True,
-            )
 
     # ── Matching por emissor (possível match — fuzzy, threshold 0.82) ──
     try:
@@ -4669,64 +4664,93 @@ def render_briefing_credito(anbima_df):
     # Card 1
     if top3_spreads is None:
         html_b1 = '<p class="briefing-fallback">Suba ≥2 runs para ver</p>'
-    elif top3_spreads.empty:
-        html_b1 = f'<p class="briefing-fallback">Nenhum ativo com |Δ| ≥ {limiar} bps</p>'
     else:
-        rows_html = ""
-        for _, r in top3_spreads.iterrows():
-            ativo     = r.get("ativo", "—")
-            delta     = r.get("delta", float("nan"))
-            indexador = r.get("indexador", "")
-            compra    = r.get("compra")
-            venda     = r.get("venda")
-            if pd.notna(compra) and pd.notna(venda):
-                mid = (compra + venda) / 2
-            elif pd.notna(compra):
-                mid = compra
-            elif pd.notna(venda):
-                mid = venda
-            else:
-                mid = None
-            taxa_txt  = f"{indexador} + {fr(mid, 2)}%" if mid is not None else "—"
-            delta_txt = f"{delta:+.0f} bps".replace("-", "−")
-            cls   = "dp" if delta > 0 else "dn"
-            rows_html += (
-                f'<div class="briefing-row">'
-                f'<span class="nm">{ativo} '
-                f'<span style="color:var(--text3);font-size:10px">{taxa_txt}</span></span>'
-                f'<span class="dl"><span class="{cls}">{delta_txt}</span></span>'
-                f'</div>'
-            )
-        count_txt = f"≥{n_ab} abrindo ↑ · ≥{n_fe} fechando ↓" if n_ab is not None else ""
-        html_b1 = rows_html + f'<p style="font-size:10.5px;color:var(--text3);margin-top:8px">{count_txt}</p>'
+        ab_df, fe_df = top3_spreads
+
+        def _spread_rows(df_sr, chip_cls):
+            rows = ""
+            for _, r in df_sr.iterrows():
+                idx    = r.get("indexador", "")
+                compra = r.get("compra")
+                venda  = r.get("venda")
+                if pd.notna(compra) and pd.notna(venda):
+                    mid = (compra + venda) / 2
+                elif pd.notna(compra):
+                    mid = compra
+                elif pd.notna(venda):
+                    mid = venda
+                else:
+                    mid = None
+                taxa = f"{idx} + {fr(mid, 2)}%" if mid is not None else "—"
+                d    = r["delta"]
+                rows += (
+                    f'<div class="briefing-row">'
+                    f'<span class="nm">{r["ativo"]}</span>'
+                    f'<span class="dl">'
+                    f'<span style="font-size:10.5px;color:var(--text3)">{taxa}</span>'
+                    f'&nbsp;<span class="cr-chip {chip_cls}">{d:+.0f} bps</span>'
+                    f'</span></div>'
+                )
+            return rows or '<span style="color:var(--text3);font-size:11px">—</span>'
+
+        html_ab   = _spread_rows(ab_df, "up")
+        html_fe   = _spread_rows(fe_df, "dn")
+        count_txt = f"{n_ab} abrindo · {n_fe} fechando" if n_ab is not None else ""
+        html_b1 = (
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
+            f'<div><div style="font-size:9.5px;font-weight:700;text-transform:uppercase;'
+            f'letter-spacing:.05em;color:var(--text3);margin-bottom:4px">Abertura ↑</div>'
+            f'{html_ab}</div>'
+            f'<div><div style="font-size:9.5px;font-weight:700;text-transform:uppercase;'
+            f'letter-spacing:.05em;color:var(--text3);margin-bottom:4px">Fechamento ↓</div>'
+            f'{html_fe}</div>'
+            f'</div>'
+            f'<div style="font-size:10px;color:var(--text3);margin-top:6px">{count_txt}</div>'
+        )
 
     # Card 2
     if top3_anbima is None:
         html_b2 = '<p class="briefing-fallback">histórico insuficiente</p>'
     else:
-        rows_html = ""
-        for _, r in top3_anbima.iterrows():
-            lbl     = r.get("label", "—")
-            tx_hoje = r.get("tx_ind")
-            delta   = r.get("delta_bps", float("nan"))
-            cls     = "dp" if delta > 0 else "dn"
-            sign    = "+" if delta > 0 else ""
-            pct     = percentil_anbima(lbl, tx_hoje)
-            if pct is None:
-                pct_html = '<span style="color:var(--text3)">—</span>'
-            elif pct >= 80:
-                pct_html = f'<span class="cr-chip dn">p{pct}</span>'
-            elif pct <= 20:
-                pct_html = f'<span class="cr-chip up">p{pct}</span>'
-            else:
-                pct_html = f'<span style="color:var(--text3);font-size:10.5px;font-weight:600">p{pct}</span>'
-            rows_html += (
-                f'<div class="briefing-row">'
-                f'<span class="nm">{lbl}</span>'
-                f'<span class="dl">{pct_html}&nbsp;<span class="{cls}">{sign}{delta:.1f} bps</span></span>'
-                f'</div>'
-            )
-        html_b2 = rows_html
+        top_ab2 = top3_anbima[top3_anbima["delta_bps"] > 0].head(3)
+        top_fe2 = top3_anbima[top3_anbima["delta_bps"] < 0].head(3)
+
+        def _anbima_rows(df_an):
+            rows = ""
+            for _, r in df_an.iterrows():
+                lbl     = r.get("label", "—")
+                tx_hoje = r.get("tx_ind")
+                delta   = r.get("delta_bps", float("nan"))
+                cls     = "up" if delta > 0 else "dn"
+                sign    = "+" if delta > 0 else ""
+                pct     = percentil_anbima(lbl, tx_hoje)
+                if pct is None:
+                    pct_html = '<span style="color:var(--text3)">—</span>'
+                elif pct >= 80:
+                    pct_html = f'<span class="cr-chip dn">p{pct}</span>'
+                elif pct <= 20:
+                    pct_html = f'<span class="cr-chip up">p{pct}</span>'
+                else:
+                    pct_html = f'<span style="color:var(--text3);font-size:10.5px;font-weight:600">p{pct}</span>'
+                rows += (
+                    f'<div class="briefing-row">'
+                    f'<span class="nm">{lbl}</span>'
+                    f'<span class="dl">{pct_html}'
+                    f'&nbsp;<span class="cr-chip {cls}">{sign}{delta:.1f}</span>'
+                    f'</span></div>'
+                )
+            return rows or '<span style="color:var(--text3);font-size:11px">—</span>'
+
+        html_b2 = (
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
+            f'<div><div style="font-size:9.5px;font-weight:700;text-transform:uppercase;'
+            f'letter-spacing:.05em;color:var(--text3);margin-bottom:4px">Abertura ↑</div>'
+            f'{_anbima_rows(top_ab2)}</div>'
+            f'<div><div style="font-size:9.5px;font-weight:700;text-transform:uppercase;'
+            f'letter-spacing:.05em;color:var(--text3);margin-bottom:4px">Fechamento ↓</div>'
+            f'{_anbima_rows(top_fe2)}</div>'
+            f'</div>'
+        )
 
     # Card 3 — ofertas registradas no último dia do SRE
     if sre_err:
