@@ -4812,7 +4812,7 @@ def render_briefing_credito(anbima_df):
                 d    = r["delta"]
                 rows += (
                     f'<div class="briefing-row">'
-                    f'<span class="nm">{r["ativo"]} </span>
+                    f'<span class="nm">{r["ativo"]} </span>'
                     f'<span style="font-size:10.5px;color:var(--text3)">{taxa}</span>'
                     f'<span class="dl">'
                     f'&nbsp;<span class="cr-chip {chip_cls}">{d:+.0f} bps</span>'
