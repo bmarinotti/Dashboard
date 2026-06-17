@@ -4257,6 +4257,24 @@ def _autosize_config(df_in):
             content_max = 0
         approx = max(len(str(col)), content_max)
         w = "small" if approx <= 14 else ("medium" if approx <= 40 else "large")
+        
+        if "total" in col.lower():
+            w = 120  # Força a coluna do Emissor a ter xpx de largura
+        elif "data" in col.lower():
+            w = 80
+        elif "emissor" in col.lower():
+            w = 220
+        elif "devedor" in col.lower():
+            w = 220
+        elif "lider" in col.lower():
+            w = 200
+        elif "destinacao" in col.lower():
+            w = 180
+        elif "garantia" in col.lower():
+            w = 180
+        elif "valor" in col.lower():
+            w = 195  # Força a coluna do Emissor a ter xpx de largura
+        
         cfg[col] = st.column_config.Column(width=w, help=str(col))
     return cfg
 
