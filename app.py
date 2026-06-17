@@ -122,7 +122,7 @@ hr { border-color: var(--border) !important; margin: 0rem 0 !important }
 .stTabs [data-baseweb="tab-panel"] { padding-top: 1.5rem }
 
 /* ── Separador visual (7ª aba) ── */
-.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(8) {
+.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(7) {
     pointer-events: none !important; cursor: default !important;
     color: var(--text3) !important; background: transparent !important;
     box-shadow: none !important; padding: 8px 10px !important;
@@ -130,8 +130,12 @@ hr { border-color: var(--border) !important; margin: 0rem 0 !important }
     opacity: .75 !important; border-left: 1px solid var(--border) !important;
     margin-left: 6px !important; user-select: none !important;
 }
-.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(8)[aria-selected="true"] {
+.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(7)[aria-selected="true"] {
     background: transparent !important; color: var(--border2) !important; box-shadow: none !important;
+}
+/* Abas auxiliares (a partir da 7ª posição) — fonte reduzida */
+.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(n+7) {
+    font-size: 70%;
 }
 
 /* ── Buttons ── */
@@ -304,7 +308,7 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
 .cr-kpi { background:var(--surf); border:1px solid var(--border); border-radius:var(--radius); padding:13px 16px; box-shadow:var(--shadow) }
 .cr-kpi .l { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text3) }
 .cr-kpi .v { font-family:'JetBrains Mono',monospace; font-size:19px; font-weight:600; margin-top:4px; color:var(--text1) }
-.cr-kpi .s { font-size:11px; margin-top:3px; font-family:'JetBrains Mono',monospace }
+.cr-kpi .s { font-size:12px; margin-top:3px; font-family:'JetBrains Mono',monospace; color:var(--text2) }
 .cr-up { color:var(--green) } .cr-dn { color:var(--red) } .cr-fl { color:var(--text3) }
 
 .cr-chip { padding:2px 7px; border-radius:6px; font-weight:600; font-size:10.5px; display:inline-block }
@@ -1268,7 +1272,6 @@ def render_conteudo_dinamico(current_calls):
     # ── Abas ──────────────────────────────────────────────────
     tabs = st.tabs([
         "Principal",
-        "Calls NTN-B",
         "Primário CVM",
         "Crédito",
         "Ativos",
@@ -1276,17 +1279,18 @@ def render_conteudo_dinamico(current_calls):
         "Newsletters",
         "Auxiliares ————›",
         "Runs corretora",
+        "Calls NTN-B",
         "📊 Curva DI",
         "📊 NTN-B ANBIMA",
     ])
     with tabs[0]: render_principal(di_data, anbima_df, current_calls, ajuste_locked, prev_bday_ajuste)
-    with tabs[1]: render_calls(anbima_df, current_calls, save_calls)
-    with tabs[2]: render_cvm()
-    with tabs[3]: render_credito(anbima_df)
-    with tabs[4]: render_ativos()
-    with tabs[5]: render_noticias()
-    with tabs[6]: render_newsletters()
-    with tabs[8]: render_runs(anbima_df)
+    with tabs[1]: render_cvm()
+    with tabs[2]: render_credito(anbima_df)
+    with tabs[3]: render_ativos()
+    with tabs[4]: render_noticias()
+    with tabs[5]: render_newsletters()
+    with tabs[7]: render_runs(anbima_df)
+    with tabs[8]: render_calls(anbima_df, current_calls, save_calls)
     with tabs[9]: render_curva_di(di_data)
     with tabs[10]: render_ntnb_anbima(anbima_df, ref_dt)
 
@@ -1300,9 +1304,6 @@ def render_principal(di, anbima, calls, ajuste_locked, prev_bday_ajuste=None):
     ts_txt = (di or {}).get("timestamp", "—")
     status = " · ajuste bloqueado" if frozen else " · lag ~15 min"
     n = len(anbima) if anbima is not None else 0
-
-    with st.expander("Ajustes", expanded=False):
-        st.number_input("Limiar (bps)", min_value=1, step=1, key="limiar_bps")
 
     render_briefing_credito(anbima)
 
@@ -1349,7 +1350,7 @@ def render_principal(di, anbima, calls, ajuste_locked, prev_bday_ajuste=None):
                 f'<td>{fd(delta)}</td>'
                 f'</tr>'
             )
-        ajuste_src = "D-1 oficial" if prev_bday_ajuste else ("D-1 intrapregão" if in_pregao else "D-1 indisp.")
+        ajuste_src = "D-1 oficial" if prev_bday_ajuste else ("D-1 intraday" if in_pregao else "D-1 indisp.")
         render_table(
             [("Vértice", ""), ("Ajuste D-1", ""), ("Último", ""), ("Δ bps", "")],
             rows, table_id="table-di",
@@ -3298,7 +3299,8 @@ def compute_run_premio(rtype):
         return None
     d = df.copy()
     d["mid"] = d[["compra", "venda"]].mean(axis=1)
-    d = d.dropna(subset=["mid", "anbima"])
+    # T4 — exige bid (compra) e ask (venda) não-nulos na call
+    d = d.dropna(subset=["compra", "venda", "anbima"])
     if d.empty:
         return None
     d["premio_bps"] = (d["mid"] - d["anbima"]) * 100
@@ -3316,9 +3318,15 @@ def compute_run_movement(rtype):
     cur = cur.copy(); prev = prev.copy()
     cur["mid"] = cur[["compra", "venda"]].mean(axis=1)
     prev["mid_p"] = prev[["compra", "venda"]].mean(axis=1)
+    prev["compra_p"] = prev["compra"]
+    prev["venda_p"]  = prev["venda"]
     cur["k"] = cur["ativo"].astype(str)
     prev["k"] = prev["ativo"].astype(str)
-    j = cur.merge(prev[["k", "mid_p"]], on="k", how="inner").dropna(subset=["mid", "mid_p"])
+    j = cur.merge(prev[["k", "mid_p", "compra_p", "venda_p"]], on="k",
+                  how="inner").dropna(subset=["mid", "mid_p"])
+    # T4 — exige bid (compra) e ask (venda) não-nulos nos DOIS runs
+    j = j[j["compra"].notna() & j["venda"].notna() &
+          j["compra_p"].notna() & j["venda_p"].notna()]
     if j.empty:
         return None
     j["delta_bps"] = (j["mid"] - j["mid_p"]) * 100
@@ -3339,10 +3347,16 @@ def _compute_top_movers(run_type):
     df_hoje["mid"]   = df_hoje[["compra", "venda"]].mean(axis=1)
     df_prev["mid_p"] = df_prev[["compra", "venda"]].mean(axis=1)
     merged = df_hoje.merge(
-        df_prev[["ativo", "mid_p", "anbima"]].rename(columns={"anbima": "anbima_p"}),
+        df_prev[["ativo", "mid_p", "anbima", "compra", "venda"]].rename(
+            columns={"anbima": "anbima_p", "compra": "compra_p", "venda": "venda_p"}),
         on="ativo", how="inner",
     )
     merged = merged.dropna(subset=["mid", "mid_p"])
+    # T4 — exige bid (compra) e ask (venda) não-nulos nos DOIS runs
+    merged = merged[
+        merged["compra"].notna() & merged["venda"].notna() &
+        merged["compra_p"].notna() & merged["venda_p"].notna()
+    ]
     if merged.empty:
         return None
     if run_type == "CDI":
@@ -3495,13 +3509,13 @@ def _cr_agenda():
     today = _brt_date()
 
     _COPOM    = [date(2026,1,29), date(2026,3,19), date(2026,5,7),
-                 date(2026,6,18), date(2026,7,30), date(2026,9,17),
+                 date(2026,6,17), date(2026,7,30), date(2026,9,17),
                  date(2026,11,5), date(2026,12,10)]
     _ATA      = [date(2026,2,6),  date(2026,3,27), date(2026,5,15),
                  date(2026,6,26), date(2026,8,7),  date(2026,9,25),
                  date(2026,11,13), date(2026,12,18)]
     _FOMC     = [date(2026,1,29), date(2026,3,19), date(2026,5,7),
-                 date(2026,6,18), date(2026,7,30), date(2026,9,16),
+                 date(2026,6,17), date(2026,7,30), date(2026,9,16),
                  date(2026,10,29), date(2026,12,10)]
     _IPCA     = [date(2026,1,14), date(2026,2,10), date(2026,3,12),
                  date(2026,4,9),  date(2026,5,12), date(2026,6,9),
@@ -3597,16 +3611,17 @@ def _cr_kpis():
                     if len(sob_ok):
                         sob_ok = sob_ok.copy()
                         sob_ok["sob"] = (sob_ok["mid"] - sob_ok["anbima"]) * 100
+                        mid_val  = sob_ok["mid"].mean()
                         sob_mean = sob_ok["sob"].mean()
-                        ipca_txt = f"{sob_mean:+.0f} bps".replace("-", "−")
-                        ipca_sub = f"{len(sob_ok)} papéis · calls {dates[0]}"
+                        ipca_txt = f"IPCA + {fr(mid_val, 2)}%"
+                        ipca_sub = f"{sob_mean:+.0f} bps over B · {len(sob_ok)} papéis · {dates[0]}"
                         ipca_src = "calls"
-                        ipca_label = "Deb IPCA+ · spread over B"
+                        ipca_label = "Deb IPCA+ · indicativa méd"
                     else:
                         mid_ok = run_df.dropna(subset=["mid"])
                         if len(mid_ok):
                             ipca_txt = f"IPCA + {fr(mid_ok['mid'].mean(), 2)}%"
-                            ipca_sub = f"{len(mid_ok)} papéis · calls {dates[0]}"
+                            ipca_sub = f"{len(mid_ok)} papéis · {dates[0]}"
                             ipca_src = "calls"
 
     # Fallback ANBIMA
@@ -3657,8 +3672,10 @@ def _cr_kpis():
         allm = pd.concat(mv_dfs, ignore_index=True)
         ab = allm.sort_values("delta_bps", ascending=False).iloc[0]
         fe = allm.sort_values("delta_bps").iloc[0]
-        mv_val = f"{ab['ativo']} {ab['delta_bps']:+.0f} bps".replace("-", "−")
-        mv_sub = f"fech {fe['ativo']} {fe['delta_bps']:+.0f}".replace("-", "−")
+        ab_txt = f"{ab['ativo']} {ab['delta_bps']:+.0f} bps".replace("-", "−")
+        fe_txt = f"{fe['ativo']} {fe['delta_bps']:+.0f} bps".replace("-", "−")
+        mv_val  = f"↑ {ab_txt}"
+        mv_sub  = f"↓ {fe_txt}"
         mv_real = True
     else:
         mv_val, mv_sub, mv_real = "—", "precisa 2 runs", False
@@ -3889,6 +3906,8 @@ def _fetch_rating_news():
             src_n = (e.get("source") or {}).get("title", "")
             if title:
                 items.append({"title": title, "link": link, "source": src_n})
+        AGENCIAS = ("S&P", "Fitch", "Moody's", "Moody")
+        items = [it for it in items if any(ag in it["title"] for ag in AGENCIAS)]
         return items, None
     except Exception as ex:
         return [], str(ex)
@@ -3945,7 +3964,7 @@ def _cr_top_movers():
             d    = a["delta"]
             dtxt = f"{d:+.0f} bps".replace("-", "−")
             dur_raw = a.get("duration")
-            dur = f"{dur_raw / 252:.2f} a" if pd.notna(dur_raw) and dur_raw else "—"
+            dur = f"{dur_raw:.2f} a" if pd.notna(dur_raw) and dur_raw else "—"
             out.append(
                 f'<tr><td class="ticker" style="text-align:left"><b>{a["ativo"]}</b></td>'
                 f'<td style="text-align:left;font-size:11px;color:var(--text3)">{(a["emissor"] or "")[:20]}</td>'
@@ -4397,14 +4416,26 @@ def render_cvm():
     if coord_col and sel_coord and sel_coord != "Todos":
         fdf = fdf[fdf[coord_col].astype(str) == sel_coord]
 
+    # ── KPIs + Distribuição: sempre D-1 (ontem) até D0 (hoje) ──
+    from datetime import timedelta as _td
+    _hoje = _brt_date()
+    _ontem = _hoje - _td(days=1)
+    if date_col:
+        fdf_kpi = df[
+            (df[date_col].dt.date >= _ontem) &
+            (df[date_col].dt.date <= _hoje)
+        ].copy()
+    else:
+        fdf_kpi = df.copy()
+
     # ── KPIs ───────────────────────────────────────────────────
-    vol_total = fdf["Valor_Total_Registrado"].sum() if "Valor_Total_Registrado" in fdf.columns else 0
-    n_ofertas = len(fdf)
-    n_book = int((fdf["Status_Requerimento"] == "Aguardando Bookbuilding").sum()) \
-             if "Status_Requerimento" in fdf.columns else 0
-    n_vivo = int(fdf["Status_Requerimento"].isin(
+    vol_total = fdf_kpi["Valor_Total_Registrado"].sum() if "Valor_Total_Registrado" in fdf_kpi.columns else 0
+    n_ofertas = len(fdf_kpi)
+    n_book = int((fdf_kpi["Status_Requerimento"] == "Aguardando Bookbuilding").sum()) \
+             if "Status_Requerimento" in fdf_kpi.columns else 0
+    n_vivo = int(fdf_kpi["Status_Requerimento"].isin(
         ["Registro Concedido", "Aguardando Bookbuilding"]).sum()) \
-        if "Status_Requerimento" in fdf.columns else 0
+        if "Status_Requerimento" in fdf_kpi.columns else 0
 
     k1, k2, k3, k4 = st.columns(4)
     k1.markdown(f'<div class="table-card" style="padding:14px 18px;margin-bottom:0">'
@@ -4452,9 +4483,9 @@ def render_cvm():
     st.download_button("Baixar filtrado (.csv)", csv_bytes,
                        file_name=f"cvm_ofertas_{_brt_today()}.csv", mime="text/csv")
 
-    # ── Volume por tipo (mini-resumo) ──────────────────────────
-    if "Valor_Total_Registrado" in fdf.columns and not fdf.empty:
-        by_tipo = (fdf.groupby("Tipo")
+    # ── Volume por tipo (mini-resumo) — mesmo intervalo D-1/D0 dos KPIs ──
+    if "Valor_Total_Registrado" in fdf_kpi.columns and not fdf_kpi.empty:
+        by_tipo = (fdf_kpi.groupby("Tipo")
                       .agg(n=("Tipo", "size"), vol=("Valor_Total_Registrado", "sum"))
                       .sort_values("vol", ascending=False))
         rows = ""
@@ -4464,7 +4495,7 @@ def render_cvm():
                      f'<td class="rate">{_fmt_bi(r["vol"])}</td></tr>')
         render_table(
             [("Tipo", "left"), ("Ofertas", ""), ("Volume", "")],
-            rows, title="Distribuição por tipo", meta=f"{from_d:%d/%m/%y} – {to_d:%d/%m/%y}",
+            rows, title="Distribuição por tipo", meta=f"D-1/D0 · {_ontem:%d/%m} – {_hoje:%d/%m}",
         )
 
 
@@ -4498,8 +4529,8 @@ def render_briefing_credito(anbima_df):
         all_fe = pd.concat(frames_fe).sort_values("_abs", ascending=False)
         all_ab = all_ab[all_ab["_abs"] >= limiar]
         all_fe = all_fe[all_fe["_abs"] >= limiar]
-        top3   = all_ab.head(3)
-        return top3, len(all_ab), len(all_fe)
+        top5   = all_ab.head(5)
+        return top5, len(all_ab), len(all_fe)
 
     # ── Bloco 2: ANBIMA D/D ────────────────────────────────────
     def _bloco_anbima():
@@ -4516,25 +4547,54 @@ def render_briefing_credito(anbima_df):
         merged["_abs"] = merged["delta_bps"].abs()
         return merged.sort_values("_abs", ascending=False).head(3)
 
-    # ── Bloco 3: SRE pipeline ───────────────────────────────────
+    # ── Bloco 3: SRE — ofertas do último dia disponível ─────────
     def _bloco_sre():
         try:
             df_sre, _err = fetch_cvm_sre()
         except Exception:
             df_sre, _err = None, "indisponível"
         if df_sre is None or df_sre.empty:
-            return None, {}, _err or "indisponível"
-        date_col_s = _find_col(df_sre, "Data_requerimento")
-        pipeline = _sre_pipeline_por_segmento(df_sre, dias=30)
-        novas = pd.DataFrame()
-        if date_col_s:
-            cutoff7 = pd.Timestamp(_brt_date()) - pd.Timedelta(days=7)
-            novas = df_sre[pd.to_datetime(df_sre[date_col_s], errors="coerce") >= cutoff7]
-        return novas, pipeline, None
+            return None, {}, "SRE indisponível", None
+
+        date_col = _find_col(df_sre, "Data_requerimento")
+        tipo_col = _find_col(df_sre, "Tipo")
+        emis_col = _find_col(df_sre, "Nome_Emissor")
+        vol_col  = _find_col(df_sre, "Valor_Total_Registrado")
+
+        # Último dia disponível
+        if date_col:
+            ultima_data = df_sre[date_col].max()
+            novas = df_sre[df_sre[date_col] == ultima_data].copy()
+        else:
+            ultima_data = None
+            novas = df_sre.head(10).copy()
+
+        # Pipeline por segmento (mantém para a síntese)
+        pipeline = _sre_pipeline_por_segmento(df_sre)
+
+        rows_html = ""
+        for _, r in novas.head(5).iterrows():
+            emissor = (str(r[emis_col]) if emis_col and pd.notna(r.get(emis_col)) else "—")[:28]
+            tipo    = str(r[tipo_col]) if tipo_col and pd.notna(r.get(tipo_col)) else "—"
+            vol_raw = r.get(vol_col) if vol_col else None
+            vol_txt = (f"R$ {vol_raw/1e6:.0f}M" if pd.notna(vol_raw) and vol_raw else "—")
+            rows_html += (
+                f'<div class="briefing-row">'
+                f'<span class="nm">{emissor}</span>'
+                f'<span class="dl">'
+                f'<span class="cr-chip fl">{tipo}</span>&nbsp;{vol_txt}'
+                f'</span>'
+                f'</div>'
+            )
+        if not rows_html:
+            rows_html = '<span style="color:var(--text3);font-size:12px">sem ofertas hoje</span>'
+
+        data_txt = ultima_data.strftime("%d/%m") if date_col and pd.notna(ultima_data) else "—"
+        return rows_html, pipeline, None, data_txt
 
     top3_spreads, n_ab, n_fe = _bloco_spreads()
     top3_anbima  = _bloco_anbima()
-    novas_sre, pipeline_sre, sre_err = _bloco_sre()
+    novas_html, pipeline_sre, sre_err, sre_data = _bloco_sre()
 
     # ── Síntese: cruzamento run↔SRE por segmento ──────────────────
     _pipeline    = pipeline_sre or {}
@@ -4614,14 +4674,27 @@ def render_briefing_credito(anbima_df):
     else:
         rows_html = ""
         for _, r in top3_spreads.iterrows():
-            ativo = r.get("ativo", "—")
-            delta = r.get("delta", float("nan"))
+            ativo     = r.get("ativo", "—")
+            delta     = r.get("delta", float("nan"))
+            indexador = r.get("indexador", "")
+            compra    = r.get("compra")
+            venda     = r.get("venda")
+            if pd.notna(compra) and pd.notna(venda):
+                mid = (compra + venda) / 2
+            elif pd.notna(compra):
+                mid = compra
+            elif pd.notna(venda):
+                mid = venda
+            else:
+                mid = None
+            taxa_txt  = f"{indexador} + {fr(mid, 2)}%" if mid is not None else "—"
+            delta_txt = f"{delta:+.0f} bps".replace("-", "−")
             cls   = "dp" if delta > 0 else "dn"
-            sign  = "+" if delta > 0 else ""
             rows_html += (
                 f'<div class="briefing-row">'
-                f'<span class="nm">{ativo}</span>'
-                f'<span class="dl"><span class="{cls}">{sign}{delta:.1f} bps</span></span>'
+                f'<span class="nm">{ativo} '
+                f'<span style="color:var(--text3);font-size:10px">{taxa_txt}</span></span>'
+                f'<span class="dl"><span class="{cls}">{delta_txt}</span></span>'
                 f'</div>'
             )
         count_txt = f"≥{n_ab} abrindo ↑ · ≥{n_fe} fechando ↓" if n_ab is not None else ""
@@ -4655,27 +4728,18 @@ def render_briefing_credito(anbima_df):
             )
         html_b2 = rows_html
 
-    # Card 3
+    # Card 3 — ofertas registradas no último dia do SRE
     if sre_err:
         html_b3 = f'<p class="briefing-fallback">SRE {sre_err}</p>'
     else:
-        n_novas = len(novas_sre) if not novas_sre.empty else 0
-        pesados = [s for s, v in pipeline_sre.items() if v.get("pesado")]
-        novas_txt = f"{n_novas} oferta(s) nos últimos 7 dias"
-        seg_html = ""
-        for s in sorted(pesados):
-            n = pipeline_sre[s]["contagem"]
-            seg_html += f'<div class="briefing-row"><span class="nm">{s}</span><span class="dl"><span class="cr-chip warn">{n} em 30 d</span></span></div>'
-        html_b3 = (
-            f'<p style="font-size:11px;color:var(--text2);margin-bottom:8px">{novas_txt}</p>'
-            + (seg_html or '<p class="briefing-fallback">Sem segmentos pesados</p>')
-        )
+        html_b3 = novas_html
+    sre_titulo = f"SRE · ofertas {sre_data}" if sre_data else "SRE Pipeline"
 
     st.markdown(
         f'<div class="briefing-grid">'
         f'<div class="briefing-card"><h4>Spreads abrindo D/D</h4>{html_b1}</div>'
         f'<div class="briefing-card"><h4>ANBIMA — mov. D/D</h4>{html_b2}</div>'
-        f'<div class="briefing-card"><h4>SRE Pipeline (30 d)</h4>{html_b3}</div>'
+        f'<div class="briefing-card"><h4>{sre_titulo}</h4>{html_b3}</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
