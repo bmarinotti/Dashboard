@@ -123,6 +123,7 @@ hr { border-color: var(--border) !important; margin: 0rem 0 !important }
 
 /* ── Separador visual (7ª aba) ── */
 .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(7) {
+    font-size: 70%;
     pointer-events: none !important; cursor: default !important;
     color: var(--text3) !important; background: transparent !important;
     box-shadow: none !important; padding: 8px 10px !important;
