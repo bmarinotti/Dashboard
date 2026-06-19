@@ -5006,8 +5006,8 @@ def render_briefing_credito(anbima_df):
     if top3_anbima is None:
         html_b2 = '<p class="briefing-fallback">histórico insuficiente</p>'
     else:
-        top_ab2 = top3_anbima[top3_anbima["delta_bps"] > 0].head(3)
-        top_fe2 = top3_anbima[top3_anbima["delta_bps"] < 0].head(3)
+        top_ab2 = top3_anbima[top3_anbima["delta_bps"] > 0].head(6)
+        top_fe2 = top3_anbima[top3_anbima["delta_bps"] < 0].head(6)
 
         def _anbima_rows(df_an):
             rows = ""
@@ -5029,7 +5029,7 @@ def render_briefing_credito(anbima_df):
                 rows += (
                     f'<div class="briefing-row">'
                     f'<span class="nm" span style="width: 200%">{lbl}'
-                    f'&nbsp;<span class="cr-chip {cls}" span style="text-align: center">{sign}{delta:.0f} bps</span>'
+                    f'&nbsp;<span class="cr-chip {cls}" span style="text-align: center font-size:11.5px">{sign}{delta:.0f} bps</span>'
                     f'</span></div>'
                 )
             return rows or '<span style="color:var(--text3);font-size:11px">—</span>'
