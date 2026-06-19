@@ -4991,7 +4991,7 @@ def render_briefing_credito(anbima_df):
         html_fe   = _spread_rows(fe_df, "dn")
         count_txt = f"{n_ab} abrindo · {n_fe} fechando" if n_ab is not None else ""
         html_b1 = (
-            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">'
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
             f'<div><div style="font-size:9.5px;font-weight:700;text-transform:uppercase;'
             f'letter-spacing:.05em;color:var(--text3);margin-bottom:4px">Abertura ↑</div>'
             f'{html_ab}</div>'
@@ -5029,7 +5029,7 @@ def render_briefing_credito(anbima_df):
                 rows += (
                     f'<div class="briefing-row">'
                     f'<span class="nm" span style="width: 200%">{lbl}'
-                    f'&nbsp;<span class="cr-chip {cls}" span style="text-align: center font-size:15px">{sign}{delta:.0f} bps</span>'
+                    f'&nbsp;<span class="cr-chip {cls}" span style="text-align:center font-size:12px; font-weight:600">{sign}{delta:.0f} bps</span>'
                     f'</span></div>'
                 )
             return rows or '<span style="color:var(--text3);font-size:11px">—</span>'
