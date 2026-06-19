@@ -331,7 +331,7 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
 .cr-up-ar { color:var(--green); font-weight:700 } .cr-dn-ar { color:var(--red); font-weight:700 }
 .cr-hint { font-size:11px; color:var(--text3); padding:9px 18px; background:var(--surf2); border-top:1px solid var(--border) }
 
-.briefing-grid { display:grid; grid-template-columns:1fr 0.7fr 1.6fr; gap:12px; margin-bottom:16px }
+.briefing-grid { display:grid; grid-template-columns:1fr 0.6fr 1.7fr; gap:12px; margin-bottom:16px }
 .briefing-card { background:var(--surf); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow) }
 .briefing-card h4 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text3); margin:0 0 10px }
 .briefing-row { display:flex; justify-content:space-between; align-items:baseline; padding:3px 0; border-bottom:1px solid var(--border) }
@@ -5029,7 +5029,7 @@ def render_briefing_credito(anbima_df):
                 rows += (
                     f'<div class="briefing-row">'
                     f'<span class="nm" span style="width: 200%">{lbl}'
-                    f'&nbsp;<span class="cr-chip {cls}" span style="text-align:center">{sign}{delta:.0f} bps</span><span class="dl" span style="width: 0%"></span>'
+                    f'&nbsp;&nbsp;<span class="cr-chip {cls}" span style="text-align:center">{sign}{delta:.0f} bps</span><span class="dl" span style="width: 0%"></span>'
                     f'</span></div>'
                 )
             return rows or '<span style="color:var(--text3);font-size:11px">—</span>'
