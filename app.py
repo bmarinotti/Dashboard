@@ -3709,7 +3709,7 @@ def _cr_kpis():
                     mid_ok = run_df.dropna(subset=["mid"])
                     if len(mid_ok):
                         cdi_txt = f"DI + {fr(mid_ok['mid'].mean(), 2)}%"
-                        cdi_sub = f"{len(mid_ok)} papéis · calls {dates[0]}"
+                        cdi_sub = f"{len(mid_ok)} debs · calls {dates[0]}"
                         cdi_src = "calls"
                 else:
                     sob_ok = run_df.dropna(subset=["mid", "anbima"])
@@ -3719,7 +3719,7 @@ def _cr_kpis():
                         mid_val  = sob_ok["mid"].mean()
                         sob_mean = sob_ok["sob"].mean()
                         ipca_txt = f"IPCA + {fr(mid_val, 2)}%"
-                        ipca_sub = f"{sob_mean:+.0f} bps over B · {len(sob_ok)} papéis · {dates[0]}"
+                        ipca_sub = f"{sob_mean:+.0f} bps over B · {len(sob_ok)} debs · {dates[0]}"
                         ipca_src = "calls"
                         ipca_label = "Deb IPCA+ · indicativa méd"
                     else:
@@ -3763,7 +3763,7 @@ def _cr_kpis():
         allp = pd.concat(prem_dfs, ignore_index=True)
         ptop = allp.sort_values("premio_bps", ascending=False).iloc[0]
         prem_val = f"{allp['premio_bps'].mean():+.0f} bps".replace("-", "−")
-        prem_sub = f"top {ptop['ativo']} {ptop['premio_bps']:+.0f}".replace("-", "−")
+        prem_sub = f"top {ptop['ativo']} {ptop['premio_bps']:+.0f} bps".replace("-", "−")
         prem_real = True
     else:
         prem_val, prem_sub, prem_real = "—", "suba um run", False
@@ -4879,8 +4879,7 @@ def render_briefing_credito(anbima_df):
         # Pipeline por segmento (mantém para a síntese)
         pipeline = _sre_pipeline_por_segmento(df_sre)
 
-        rows_html = ""
-        for _, r in novas.head(7).iterrows():
+        def _sre_row(r):
             emissor = (str(r[emis_col]) if emis_col and pd.notna(r.get(emis_col)) else "—")[:40]
             tipo    = str(r[tipo_col]) if tipo_col and pd.notna(r.get(tipo_col)) else "—"
             # Para CRI/CRA/CR mostra o devedor no lugar do emissor (securitizadora)
@@ -4892,7 +4891,7 @@ def render_briefing_credito(anbima_df):
                     emissor = dev_val[:40]
             vol_raw = r.get(vol_col) if vol_col else None
             vol_txt = (f"R$ {vol_raw/1e6:.0f}M" if pd.notna(vol_raw) and vol_raw else "—")
-            rows_html += (
+            return (
                 f'<div class="briefing-row">'
                 f'<span class="nm">{emissor}</span>'
                 f'<span class="dl">'
@@ -4900,8 +4899,22 @@ def render_briefing_credito(anbima_df):
                 f'</span>'
                 f'</div>'
             )
-        if not rows_html:
+
+        # Até 14 ofertas em duas colunas (no máx. 7 por coluna)
+        novas14 = novas.head(14)
+        col_esq = "".join(_sre_row(r) for _, r in novas14.iloc[:7].iterrows())
+        col_dir = "".join(_sre_row(r) for _, r in novas14.iloc[7:14].iterrows())
+        if not col_esq and not col_dir:
             rows_html = '<span style="color:var(--text3);font-size:12px">sem ofertas no período</span>'
+        elif not col_dir:
+            rows_html = col_esq
+        else:
+            rows_html = (
+                f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'
+                f'<div>{col_esq}</div>'
+                f'<div>{col_dir}</div>'
+                f'</div>'
+            )
 
         return rows_html, pipeline, None, data_txt
 
