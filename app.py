@@ -3530,6 +3530,11 @@ def _cr_agenda():
                  date(2026,4,30), date(2026,5,29), date(2026,6,30),
                  date(2026,7,31), date(2026,8,31), date(2026,9,30),
                  date(2026,10,30), date(2026,11,30), date(2026,12,30)]
+    # INCC-M (FGV) — índice de custo da construção, relevante p/ CRI e incorporação
+    _INCC     = [date(2026,1,29), date(2026,2,26), date(2026,3,30),
+                 date(2026,4,29), date(2026,5,28), date(2026,6,29),
+                 date(2026,7,30), date(2026,8,28), date(2026,9,29),
+                 date(2026,10,29), date(2026,11,27), date(2026,12,29)]
     _PIB      = [date(2026,5,29), date(2026,8,28), date(2026,11,27)]
     _RTN      = [date(2026,1,29), date(2026,2,26), date(2026,3,26),
                  date(2026,4,30), date(2026,5,29), date(2026,6,25),
@@ -3552,6 +3557,7 @@ def _cr_agenda():
         _next(_IPCA,   "IPCA",        "IBGE · inflação",   "inf"),
         _next(_IPCA15, "IPCA-15",     "IBGE · prévia",     "inf"),
         _next(_IGPM,   "IGP-M",       "FGV · inflação",    "inf"),
+        _next(_INCC,   "INCC-M",      "FGV · construção",  "inf"),
         _next(_PIB,    "PIB",         "IBGE · crescimento","act"),
         _next(_RTN,    "Res. Primário","Tesouro · fiscal", "act"),
     ]
@@ -3675,14 +3681,16 @@ def _cr_kpis():
         fe = allm.sort_values("delta_bps").iloc[0]
         ab_txt = f"{ab['ativo']} {ab['delta_bps']:+.0f} bps".replace("-", "−")
         fe_txt = f"{fe['ativo']} {fe['delta_bps']:+.0f} bps".replace("-", "−")
+        ab_color = "var(--green)" if ab["delta_bps"] > 0 else ("var(--red)" if ab["delta_bps"] < 0 else "var(--text2)")
+        fe_color = "var(--green)" if fe["delta_bps"] > 0 else ("var(--red)" if fe["delta_bps"] < 0 else "var(--text2)")
         mv_card_html = (
             f'<div class="cr-kpi">'
             f'<div class="l">Mov. D/D · abertura / fechamento</div>'
             f'<div style="display:flex;flex-direction:column;gap:5px;margin-top:6px">'
             f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:13px;'
-            f'font-weight:600;color:var(--red)">↑ {ab_txt}</div>'
+            f'font-weight:600;color:{ab_color}">↑ {ab_txt}</div>'
             f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:13px;'
-            f'font-weight:600;color:var(--green)">↓ {fe_txt}</div>'
+            f'font-weight:600;color:{fe_color}">↓ {fe_txt}</div>'
             f'</div></div>'
         )
     else:
@@ -4008,7 +4016,7 @@ def _fetch_rating_news():
             _FITCH_KEYS = ("fitch",)
             fitch_added = 0
             for e in feed.entries[:8]:
-                if fitch_added >= 4:
+                if fitch_added >= 2:
                     break
                 title = e.get("title", "").strip()
                 src_n = (e.get("source") or {}).get("title", "") or ""
@@ -4222,7 +4230,7 @@ _CVM_TIPO_MAP = [
     ("CRI",            ["recebíveis imobiliários", "recebiveis imobiliarios"]),
     ("CRA",            ["recebíveis do agronegócio", "recebiveis do agronegocio",
                         "direitos creditórios do agronegócio", "direitos creditorios do agronegocio"]),
-    ("Nota Comercial", ["notas comerciais", "nota comercial"]),
+    ("NC", ["notas comerciais", "nota comercial"]),
     ("FIAGRO",         ["fiagro"]),
     ("CPR",            ["cédula de produto rural", "cedula de produto rural", "cpr"]),
     ("Securitização",  ["securitização", "securitizacao", "certificados de recebíveis",
@@ -4688,20 +4696,43 @@ def render_briefing_credito(anbima_df):
         fe = all_fe.head(5)
         return (ab, fe), len(all_ab), len(all_fe)
 
-    # ── Bloco 2: ANBIMA D/D ────────────────────────────────────
+    # ── Bloco 2: ANBIMA debêntures — maiores aberturas/fechamentos de spread D/D ──
     def _bloco_anbima():
-        if anbima_df is None or anbima_df.empty:
+        # Arquivo do último dia útil disponível
+        df_hoje, ymd_hoje = _anbima_deb_load_latest()
+        if df_hoje is None or df_hoje.empty or not ymd_hoje:
             return None
-        prev = load_anbima_prev()
-        if prev is None or prev.empty:
+        # Arquivo do dia útil anterior (D-1 útil)
+        d_atual = datetime.strptime(ymd_hoje, "%y%m%d").date()
+        df_prev, ymd_prev = None, None
+        d = d_atual - timedelta(days=1)
+        for _ in range(7):
+            if d.weekday() < 5:
+                _ymd = d.strftime("%y%m%d")
+                _df, _e = fetch_anbima_debentures(_ymd)
+                if _df is not None and len(_df):
+                    df_prev, ymd_prev = _df, _ymd
+                    break
+            d -= timedelta(days=1)
+        if df_prev is None or df_prev.empty:
             return None
-        merged = anbima_df.merge(prev, on="label", how="inner")
-        merged = merged.dropna(subset=["tx_ind", "tx_ind_prev"])
+
+        cur = df_hoje[["codigo", "nome", "indice", "indicativa"]].dropna(subset=["indicativa"])
+        prv = df_prev[["codigo", "indicativa"]].dropna(subset=["indicativa"]).rename(
+            columns={"indicativa": "indicativa_prev"})
+        merged = cur.merge(prv, on="codigo", how="inner")
         if merged.empty:
             return None
-        merged["delta_bps"] = (merged["tx_ind"] - merged["tx_ind_prev"]) * 100
-        merged["_abs"] = merged["delta_bps"].abs()
-        return merged.sort_values("_abs", ascending=False).head(3)
+        # Spread em bps: indicativa está em % → ×100 p/ bps
+        merged["delta_bps"] = (merged["indicativa"] - merged["indicativa_prev"]) * 100
+        merged = merged.dropna(subset=["delta_bps"])
+        if merged.empty:
+            return None
+        # label = código (nome do papel), tx_ind = indicativa atual
+        merged["label"]  = merged["codigo"].astype(str).str.strip()
+        merged["tx_ind"] = merged["indicativa"]
+        merged["_abs"]   = merged["delta_bps"].abs()
+        return merged.sort_values("_abs", ascending=False).head(6)
 
     # ── Bloco 3: SRE — ofertas do último dia disponível ─────────
     def _bloco_sre():
@@ -4715,6 +4746,7 @@ def render_briefing_credito(anbima_df):
         date_col = _find_col(df_sre, "Data_requerimento")
         tipo_col = _find_col(df_sre, "Tipo")
         emis_col = _find_col(df_sre, "Nome_Emissor")
+        dev_col  = _find_col(df_sre, "Identificacao_devedores_coobrigados")
         vol_col  = _find_col(df_sre, "Valor_Total_Registrado")
 
         # D-1 até D0
@@ -4737,9 +4769,16 @@ def render_briefing_credito(anbima_df):
         pipeline = _sre_pipeline_por_segmento(df_sre)
 
         rows_html = ""
-        for _, r in novas.head(5).iterrows():
+        for _, r in novas.head(7).iterrows():
             emissor = (str(r[emis_col]) if emis_col and pd.notna(r.get(emis_col)) else "—")[:40]
             tipo    = str(r[tipo_col]) if tipo_col and pd.notna(r.get(tipo_col)) else "—"
+            # Para CRI/CRA/CR mostra o devedor no lugar do emissor (securitizadora)
+            _tipo_norm = tipo.strip().upper()
+            if _tipo_norm in ("CRI", "CRA", "CR"):
+                dev_val = str(r[dev_col]) if dev_col and pd.notna(r.get(dev_col)) else ""
+                dev_val = dev_val.strip()
+                if dev_val and dev_val not in ("—", "nan", "None"):
+                    emissor = dev_val[:40]
             vol_raw = r.get(vol_col) if vol_col else None
             vol_txt = (f"R$ {vol_raw/1e6:.0f}M" if pd.notna(vol_raw) and vol_raw else "—")
             rows_html += (
@@ -4862,7 +4901,7 @@ def render_briefing_credito(anbima_df):
         def _anbima_rows(df_an):
             rows = ""
             for _, r in df_an.iterrows():
-                lbl     = r.get("label", "—")
+                lbl     = str(r.get("label", "—"))[:14]
                 tx_hoje = r.get("tx_ind")
                 delta   = r.get("delta_bps", float("nan"))
                 cls     = "up" if delta > 0 else "dn"
@@ -4905,7 +4944,7 @@ def render_briefing_credito(anbima_df):
     st.markdown(
         f'<div class="briefing-grid">'
         f'<div class="briefing-card"><h4>Spreads D/D</h4>{html_b1}</div>'
-        f'<div class="briefing-card"><h4>ANBIMA — mov. D/D</h4>{html_b2}</div>'
+        f'<div class="briefing-card"><h4>ANBIMA deb · spread D/D</h4>{html_b2}</div>'
         f'<div class="briefing-card"><h4>{sre_titulo}</h4>{html_b3}</div>'
         f'</div>',
         unsafe_allow_html=True,
