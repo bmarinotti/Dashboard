@@ -4771,7 +4771,7 @@ def render_briefing_credito(anbima_df):
     limiar = st.session_state.get("limiar_bps", LIMIAR_BPS_DEFAULT)
 
     # ── Periodicidade independente p/ Spreads D/D e ANBIMA deb ──
-    _pcol1, _pcol2, _pcol3 = st.columns([1, 0.8, 1.5])
+    _pcol1, _pcol2, _pcol3 = st.columns([1.02, 0.8, 1.5])
     with _pcol1:
         st.caption("Spreads · período")
         n_du_spreads = render_periodo_toggle("briefing_spreads")
