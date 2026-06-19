@@ -185,7 +185,7 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
     color: var(--text2) !important; padding: 12px 16px !important;
 }
 [data-testid="stExpander"] summary:hover { color: var(--text1) !important; background: var(--surf2) !important; }
-[data-testid="stCaptionContainer"] p { color: var(--text3) !important; font-size: 11px !important }
+[data-testid="stCaptionContainer"] p { color: var(--text3) !important; margin-bottom: -8px !important; font-size: 11px !important }
 
 /* ── Table card ── */
 .table-card {
