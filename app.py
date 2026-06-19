@@ -5035,7 +5035,7 @@ def render_briefing_credito(anbima_df):
             return rows or '<span style="color:var(--text3);font-size:11px">—</span>'
 
         html_b2 = (
-            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'
             f'<div><div style="font-size:9.5px;font-weight:700;text-transform:uppercase;'
             f'letter-spacing:.05em;color:var(--text3);margin-bottom:4px">Abertura ↑</div>'
             f'{_anbima_rows(top_ab2)}</div>'
