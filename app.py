@@ -185,7 +185,7 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
     color: var(--text2) !important; padding: 12px 16px !important;
 }
 [data-testid="stExpander"] summary:hover { color: var(--text1) !important; background: var(--surf2) !important; }
-[data-testid="stCaptionContainer"] p { color: var(--text3) !important; margin-bottom: -1px !important; font-size: 11px !important }
+[data-testid="stCaptionContainer"] p { color: var(--text3) !important; margin-bottom: 0px !important; font-size: 11px !important }
 
 /* ── Table card ── */
 .table-card {
@@ -355,7 +355,7 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
 div[role="radiogroup"] {
     gap: 4px !important; background: var(--surf); border: 1px solid var(--border);
     border-radius: var(--radius-sm); padding: 3px; display: inline-flex;
-    box-shadow: 0 1px 2px rgba(0,0,0,.02); margin-bottom: 0px !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,.02); margin-bottom: -4px !important;
 }
 div[role="radiogroup"] label {
     margin: 0 !important; padding: 4px 10px !important; border-radius: 6px !important;
