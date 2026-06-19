@@ -3300,10 +3300,10 @@ def load_run_dates(rtype):
 
 # ── Periodicidade de análise (dias úteis para trás) ──────────────
 PERIODO_OPCOES = [
-    ("1 dia útil",   1),
-    ("5 dias úteis", 5),
-    ("10 dias úteis", 10),
-    ("20 dias úteis", 20),
+    ("1d",   1),
+    ("5d", 5),
+    ("10d", 10),
+    ("20d", 20),
 ]
 PERIODO_DEFAULT = 1
 
@@ -4771,7 +4771,7 @@ def render_briefing_credito(anbima_df):
     limiar = st.session_state.get("limiar_bps", LIMIAR_BPS_DEFAULT)
 
     # ── Periodicidade independente p/ Spreads D/D e ANBIMA deb ──
-    _pcol1, _pcol2, _pcol3 = st.columns([1, 1, 1])
+    _pcol1, _pcol2, _pcol3 = st.columns([1.3, 0.8, 1])
     with _pcol1:
         st.caption("Spreads · período")
         n_du_spreads = render_periodo_toggle("briefing_spreads")
