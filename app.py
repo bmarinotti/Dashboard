@@ -285,7 +285,7 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
     .block-container { padding-left: 12px !important; padding-right: 12px !important }
     .mon-table th, .mon-table td { padding: 6px 10px; font-size: 11.5px }
     .mon-table td.dur { display: none }
-    .mon-table th:nth-child(2) { display: none }
+    .mon-table:not(#table-di) th:nth-child(2) { display: none }
     #table-di { width: 100% !important; min-width: 300px }
     h1 { font-size: 1.35rem !important }
     .cr-kpis { grid-template-columns: repeat(2,1fr) !important }
@@ -350,6 +350,24 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
 @media (max-width: 560px) {
     .briefing-grid { grid-template-columns:1fr !important }
 }
+
+/* ── Periodicidade (radio horizontal estilo segmented control) ── */
+div[role="radiogroup"] {
+    gap: 4px !important; background: var(--surf); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 3px; display: inline-flex;
+    box-shadow: 0 1px 2px rgba(0,0,0,.02);
+}
+div[role="radiogroup"] label {
+    margin: 0 !important; padding: 4px 10px !important; border-radius: 6px !important;
+    cursor: pointer; transition: all .15s ease;
+}
+div[role="radiogroup"] label:hover { background: var(--surf2) }
+div[role="radiogroup"] label p {
+    font-size: 11px !important; font-weight: 600 !important; color: var(--text2) !important;
+}
+div[role="radiogroup"] label:has(input:checked) { background: var(--accentbg) !important }
+div[role="radiogroup"] label:has(input:checked) p { color: var(--accent) !important }
+div[role="radiogroup"] label > div:first-child { display: none !important } /* esconde a bolinha */
 </style>
 """, unsafe_allow_html=True)
 
@@ -3280,6 +3298,82 @@ def load_run_dates(rtype):
         return []
 
 
+# ── Periodicidade de análise (dias úteis para trás) ──────────────
+PERIODO_OPCOES = [
+    ("1 dia útil",   1),
+    ("5 dias úteis", 5),
+    ("10 dias úteis", 10),
+    ("20 dias úteis", 20),
+]
+PERIODO_DEFAULT = 1
+
+
+def get_periodo_du(key: str) -> int:
+    """Lê a periodicidade (dias úteis) selecionada para um bloco; default 1."""
+    return int(st.session_state.get(f"periodo_du_{key}", PERIODO_DEFAULT))
+
+
+def render_periodo_toggle(key: str):
+    """Renderiza um seletor de periodicidade (1/5/10/20 du) para um bloco.
+    Persiste em st.session_state[f'periodo_du_{key}']."""
+    atual = get_periodo_du(key)
+    labels = [lbl for lbl, _ in PERIODO_OPCOES]
+    vals   = [v for _, v in PERIODO_OPCOES]
+    try:
+        idx = vals.index(atual)
+    except ValueError:
+        idx = vals.index(PERIODO_DEFAULT)
+    escolha = st.radio(
+        "Periodicidade (dias úteis)", labels, index=idx,
+        horizontal=True, key=f"periodo_radio_{key}",
+        label_visibility="collapsed",
+    )
+    st.session_state[f"periodo_du_{key}"] = dict(zip(labels, vals))[escolha]
+    return st.session_state[f"periodo_du_{key}"]
+
+
+def _target_date_n_du_back(ref: date, n_du: int) -> date:
+    """Retorna a data n dias úteis antes de ref (usando calendário ANBIMA)."""
+    try:
+        d64 = np.busday_offset(
+            np.datetime64(ref, "D"), -int(n_du), roll="backward",
+            busdaycal=_BUSDAYCAL,
+        )
+        return d64.astype("datetime64[D]").astype(date)
+    except Exception:
+        d = ref
+        steps = n_du
+        while steps > 0:
+            d -= timedelta(days=1)
+            if is_bday(d):
+                steps -= 1
+        return d
+
+
+def pick_prev_run_date(dates_desc, n_du: int):
+    """Dada lista de datas (str ISO) ordenada desc e nº de dias úteis para trás,
+    escolhe a data de run de comparação: a mais recente <= alvo (ref - n_du).
+    Fallback: a mais antiga disponível. Retorna str ou None."""
+    if not dates_desc:
+        return None
+    try:
+        ref = date.fromisoformat(dates_desc[0])
+    except Exception:
+        # se não-ISO, cai no comportamento por índice
+        idx = min(n_du, len(dates_desc) - 1)
+        return dates_desc[idx] if len(dates_desc) > 1 else None
+    alvo = _target_date_n_du_back(ref, n_du)
+    alvo_iso = alvo.isoformat()
+    # dates_desc está em ordem decrescente; pega a 1ª data <= alvo
+    for d in dates_desc[1:]:
+        if d <= alvo_iso:
+            return d
+    # nenhuma <= alvo → usa a mais antiga disponível (que ainda seja < ref)
+    candidatas = [d for d in dates_desc[1:] if d < dates_desc[0]]
+    return candidatas[-1] if candidatas else None
+
+
+
 def load_run_on(rtype, brt_date):
     try:
         with _db() as con:
@@ -3340,13 +3434,17 @@ def compute_run_movement(rtype):
     return {"cur": dates[0], "prev": dates[1], "df": j}
 
 
-def _compute_top_movers(run_type):
-    """Top movers D/D: Δ bps (CDI) ou Δ SOB (IPCA) entre os 2 runs mais recentes."""
+def _compute_top_movers(run_type, n_du: int = 1):
+    """Top movers D/D: Δ bps (CDI) ou Δ SOB (IPCA) entre o run mais recente e o
+    run de n_du dias úteis atrás (default 1)."""
     dates = load_run_dates(run_type)
     if len(dates) < 2:
         return None
+    prev_date = pick_prev_run_date(dates, n_du)
+    if prev_date is None:
+        return None
     df_hoje = load_run_on(run_type, dates[0])
-    df_prev  = load_run_on(run_type, dates[1])
+    df_prev  = load_run_on(run_type, prev_date)
     if df_hoje is None or df_prev is None:
         return None
     df_hoje = df_hoje.copy()
@@ -3377,7 +3475,7 @@ def _compute_top_movers(run_type):
     fe = merged[merged["delta"] < 0].sort_values("_abs", ascending=False).head(15)
     return {
         "data_hoje": dates[0],
-        "data_prev": dates[1],
+        "data_prev": prev_date,
         "abertura":  ab.reset_index(drop=True),
         "fechamento": fe.reset_index(drop=True),
         "n_total": len(merged),
@@ -4066,15 +4164,16 @@ def _cr_rating_actions():
 
 def _cr_top_movers():
     """Grid 2×2 — top 15 por |Δ bps| separados por tipo (CDI/IPCA) e direção."""
-    data = {rt: _compute_top_movers(rt) for rt in ("CDI", "IPCA")}
-    if all(v is None for v in data.values()):
-        return
-
     st.markdown(
         '<p class="mon-head" style="margin:16px 0 6px">Top movers D/D '
         '<span class="table-card-meta" style="color:var(--green)">Fonte: Call Ativa</span></p>',
         unsafe_allow_html=True,
     )
+    n_du = render_periodo_toggle("top_movers")
+    data = {rt: _compute_top_movers(rt, n_du) for rt in ("CDI", "IPCA")}
+    if all(v is None for v in data.values()):
+        st.caption("Histórico insuficiente para a periodicidade selecionada.")
+        return
 
     headers = [
         ("Ativo", "left"), ("Emissor", "left"), ("Δ bps", ""),
@@ -4243,7 +4342,7 @@ _CVM_TIPO_MAP = [
 ]
 
 _RUN_PARA_SRE: dict = {
-    "CDI":  ["Debênture", "Nota Comercial"],
+    "CDI":  ["Debênture", "NC"],
     "IPCA": ["Debênture", "CRI", "CRA", "FI-Infra", "FIAGRO", "Securitização"],
 }
 
@@ -4582,12 +4681,14 @@ def render_cvm():
     if coord_col and sel_coord and sel_coord != "Todos":
         fdf = fdf[fdf[coord_col].astype(str) == sel_coord]
 
-    # ── KPIs + Distribuição: sempre D-1 (ontem) até D0 (hoje) ──
+    # ── KPIs + Distribuição: janela de N dias úteis para trás (default 1) ──
+    st.caption("Distribuição por ativo · período")
+    n_du_cvm = render_periodo_toggle("cvm_distribuicao")
     _hoje_cvm  = pd.Timestamp(_brt_date()).normalize()
-    _ontem_cvm = _hoje_cvm - pd.Timedelta(days=1)
+    _ini_cvm   = pd.Timestamp(_target_date_n_du_back(_brt_date(), n_du_cvm)).normalize()
     if date_col:
         _col_dt = pd.to_datetime(df[date_col], errors="coerce").dt.normalize()
-        fdf_kpi = df[(_col_dt >= _ontem_cvm) & (_col_dt <= _hoje_cvm)].copy()
+        fdf_kpi = df[(_col_dt >= _ini_cvm) & (_col_dt <= _hoje_cvm)].copy()
     else:
         fdf_kpi = df.copy()
 
@@ -4658,7 +4759,7 @@ def render_cvm():
                      f'<td class="rate">{_fmt_bi(r["vol"])}</td></tr>')
         render_table(
             [("Tipo", "left"), ("Ofertas", ""), ("Volume", "")],
-            rows, title="Distribuição por tipo", meta=f"D-1/D0 · {_ontem_cvm.strftime('%d/%m')} – {_hoje_cvm.strftime('%d/%m')}",
+            rows, title="Distribuição por tipo", meta=f"{n_du_cvm} du · {_ini_cvm.strftime('%d/%m')} – {_hoje_cvm.strftime('%d/%m')}",
         )
 
 
@@ -4669,10 +4770,19 @@ def render_briefing_credito(anbima_df):
     """3 cards de síntese (spreads, ANBIMA, SRE) + faixa de leitura. Aparece acima das tabelas na Principal."""
     limiar = st.session_state.get("limiar_bps", LIMIAR_BPS_DEFAULT)
 
+    # ── Periodicidade independente p/ Spreads D/D e ANBIMA deb ──
+    _pcol1, _pcol2, _pcol3 = st.columns([1, 1, 1])
+    with _pcol1:
+        st.caption("Spreads D/D · período")
+        n_du_spreads = render_periodo_toggle("briefing_spreads")
+    with _pcol2:
+        st.caption("ANBIMA deb · período")
+        n_du_anbima = render_periodo_toggle("briefing_anbima")
+
     # ── Bloco 1: Spreads D/D (runs CDI + IPCA) ─────────────────
     def _bloco_spreads():
-        mov_cdi  = _compute_top_movers("CDI")
-        mov_ipca = _compute_top_movers("IPCA")
+        mov_cdi  = _compute_top_movers("CDI", n_du_spreads)
+        mov_ipca = _compute_top_movers("IPCA", n_du_spreads)
         if mov_cdi is None and mov_ipca is None:
             return None, None, None  # sem dados
         frames_ab = []
@@ -4702,12 +4812,13 @@ def render_briefing_credito(anbima_df):
         df_hoje, ymd_hoje = _anbima_deb_load_latest()
         if df_hoje is None or df_hoje.empty or not ymd_hoje:
             return None
-        # Arquivo do dia útil anterior (D-1 útil)
+        # Arquivo do dia útil de comparação (n_du dias úteis atrás)
         d_atual = datetime.strptime(ymd_hoje, "%y%m%d").date()
+        alvo = _target_date_n_du_back(d_atual, n_du_anbima)
         df_prev, ymd_prev = None, None
-        d = d_atual - timedelta(days=1)
-        for _ in range(7):
-            if d.weekday() < 5:
+        d = alvo
+        for _ in range(12):
+            if d.weekday() < 5 and d < d_atual:
                 _ymd = d.strftime("%y%m%d")
                 _df, _e = fetch_anbima_debentures(_ymd)
                 if _df is not None and len(_df):
@@ -4760,8 +4871,8 @@ def render_briefing_credito(anbima_df):
             novas = df_sre.head(10).copy()
         data_txt = f"{_d1.strftime('%d/%m')}–{_d0.strftime('%d/%m')}"
 
-        # Filtra só instrumentos DCM relevantes (Debênture, CRI, CRA, Nota Comercial)
-        _TIPOS_BRIEFING = {"Debênture", "CRI", "CRA", "Nota Comercial"}
+        # Filtra só instrumentos DCM relevantes (Debênture, CRI, CRA, NC)
+        _TIPOS_BRIEFING = {"Debênture", "CRI", "CRA", "NC"}
         if tipo_col and tipo_col in novas.columns:
             novas = novas[novas[tipo_col].isin(_TIPOS_BRIEFING)]
 
@@ -4918,7 +5029,7 @@ def render_briefing_credito(anbima_df):
                 rows += (
                     f'<div class="briefing-row">'
                     f'<span class="nm">{lbl}'
-                    f'&nbsp;<span class="cr-chip {cls}">{sign}{delta:.1f}</span>'
+                    f'&nbsp;<span class="cr-chip {cls}">{sign}{delta:.0f} bps</span>'
                     f'</span></div>'
                 )
             return rows or '<span style="color:var(--text3);font-size:11px">—</span>'
