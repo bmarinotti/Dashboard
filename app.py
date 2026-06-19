@@ -331,7 +331,7 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
 .cr-up-ar { color:var(--green); font-weight:700 } .cr-dn-ar { color:var(--red); font-weight:700 }
 .cr-hint { font-size:11px; color:var(--text3); padding:9px 18px; background:var(--surf2); border-top:1px solid var(--border) }
 
-.briefing-grid { display:grid; grid-template-columns:1.3fr 0.4fr 1.8fr; gap:12px; margin-bottom:16px }
+.briefing-grid { display:grid; grid-template-columns:1.6fr 0.4fr 1.8fr; gap:12px; margin-bottom:16px }
 .briefing-card { background:var(--surf); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow) }
 .briefing-card h4 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text3); margin:0 0 -10px }
 .briefing-row { display:flex; justify-content:space-between; align-items:baseline; padding:3px 0; border-bottom:1px solid var(--border) }
