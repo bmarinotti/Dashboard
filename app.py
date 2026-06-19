@@ -331,7 +331,7 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
 .cr-up-ar { color:var(--green); font-weight:700 } .cr-dn-ar { color:var(--red); font-weight:700 }
 .cr-hint { font-size:11px; color:var(--text3); padding:9px 18px; background:var(--surf2); border-top:1px solid var(--border) }
 
-.briefing-grid { display:grid; grid-template-columns:1.08fr 1fr 1fr; gap:12px; margin-bottom:16px }
+.briefing-grid { display:grid; grid-template-columns:1.08fr 0.5fr 1fr; gap:12px; margin-bottom:16px }
 .briefing-card { background:var(--surf); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow) }
 .briefing-card h4 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text3); margin:0 0 10px }
 .briefing-row { display:flex; justify-content:space-between; align-items:baseline; padding:3px 0; border-bottom:1px solid var(--border) }
@@ -4773,7 +4773,7 @@ def render_briefing_credito(anbima_df):
     # ── Periodicidade independente p/ Spreads D/D e ANBIMA deb ──
     _pcol1, _pcol2, _pcol3 = st.columns([1, 1, 1])
     with _pcol1:
-        st.caption("Spreads D/D · período")
+        st.caption("Spreads · período")
         n_du_spreads = render_periodo_toggle("briefing_spreads")
     with _pcol2:
         st.caption("ANBIMA deb · período")
@@ -4802,8 +4802,8 @@ def render_briefing_credito(anbima_df):
         all_fe = pd.concat(frames_fe).sort_values("_abs", ascending=False)
         all_ab = all_ab[all_ab["_abs"] >= limiar]
         all_fe = all_fe[all_fe["_abs"] >= limiar]
-        ab = all_ab.head(5)
-        fe = all_fe.head(5)
+        ab = all_ab.head(6)
+        fe = all_fe.head(6)
         return (ab, fe), len(all_ab), len(all_fe)
 
     # ── Bloco 2: ANBIMA debêntures — maiores aberturas/fechamentos de spread D/D ──
@@ -5054,8 +5054,8 @@ def render_briefing_credito(anbima_df):
 
     st.markdown(
         f'<div class="briefing-grid">'
-        f'<div class="briefing-card"><h4>Spreads D/D</h4>{html_b1}</div>'
-        f'<div class="briefing-card"><h4>ANBIMA deb · spread D/D</h4>{html_b2}</div>'
+        f'<div class="briefing-card"><h4>Spreads</h4>{html_b1}</div>'
+        f'<div class="briefing-card"><h4>ANBIMA deb · spread</h4>{html_b2}</div>'
         f'<div class="briefing-card"><h4>{sre_titulo}</h4>{html_b3}</div>'
         f'</div>',
         unsafe_allow_html=True,
