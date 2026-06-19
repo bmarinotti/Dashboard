@@ -333,7 +333,7 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
 
 .briefing-grid { display:grid; grid-template-columns:1.1fr 0.4fr 1.8fr; gap:12px; margin-bottom:16px }
 .briefing-card { background:var(--surf); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow) }
-.briefing-card h4 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text3); margin:0 0 10px }
+.briefing-card h4 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text3); margin:0 0 2px }
 .briefing-row { display:flex; justify-content:space-between; align-items:baseline; padding:3px 0; border-bottom:1px solid var(--border) }
 .briefing-row:last-child { border-bottom:none }
 .briefing-row .nm { font-size:12px; color:var(--text1); font-weight:600; width: 60%; /* <--- FIXE O TAMANHO DA "COLUNA" ESQUERDA AQUI */
@@ -5054,8 +5054,8 @@ def render_briefing_credito(anbima_df):
 
     st.markdown(
         f'<div class="briefing-grid">'
-        f'<div class="briefing-card"><h4>Spreads</h4>{html_b1}</div>'
-        f'<div class="briefing-card"><h4>ANBIMA deb · spread</h4>{html_b2}</div>'
+        f'<div class="briefing-card"><h4>Top Movers do Call</h4>{html_b1}</div>'
+        f'<div class="briefing-card"><h4>ANBIMA deb · Spread</h4>{html_b2}</div>'
         f'<div class="briefing-card"><h4>{sre_titulo}</h4>{html_b3}</div>'
         f'</div>',
         unsafe_allow_html=True,
