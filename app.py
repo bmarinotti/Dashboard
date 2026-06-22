@@ -1566,111 +1566,120 @@ def render_ferramentas():
     st.markdown('<div class="aux-tab-banner">🛠️ Ferramentas — utilitários do dia a dia</div>',
                 unsafe_allow_html=True)
 
-    sub = st.tabs(["Conversor PDF → txt/md", "Feed de comunicados (CVM)"])
-
     # ── Conversor PDF ──────────────────────────────────────────
-    with sub[0]:
-        st.markdown("##### Conversor de PDF")
-        st.caption("Extrai texto (pymupdf) e tabelas (pdfplumber) de PDFs. "
-                   "Gera .txt e .md para download. Tudo em memória — nada é salvo no servidor.")
+    st.markdown("##### Conversor de PDF → txt/md")
+    st.caption("Extrai texto (pymupdf) e tabelas (pdfplumber) de PDFs. "
+               "Gera .txt e .md para download. Tudo em memória — nada é salvo no servidor.")
 
-        if not (HAS_FITZ and HAS_PDFPLUMBER):
-            st.error("Bibliotecas ausentes no ambiente. Adicione `pymupdf` e `pdfplumber` "
-                     "ao requirements.txt para usar o conversor.")
-        else:
-            ocr_on = st.checkbox(
-                "Ativar OCR para páginas escaneadas (mais lento; requer Tesseract no servidor)",
-                value=False,
-                help="Use só se algum PDF for imagem/escaneado. Exige o pacote de sistema "
-                     "tesseract-ocr (packages.txt) e pytesseract+Pillow no requirements.",
-            )
-            ups = st.file_uploader("Selecione um ou mais PDFs", type=["pdf"],
-                                   accept_multiple_files=True, key="pdf_conv_up")
-            if ups:
-                if st.button("Converter", type="primary", key="pdf_conv_btn"):
-                    for up in ups:
-                        nome = up.name
-                        base = nome[:-4] if nome.lower().endswith(".pdf") else nome
-                        try:
-                            with st.spinner(f"Processando {nome}…"):
-                                data = up.getvalue()
-                                txt, md, info = _converter_pdf(data, nome, usar_ocr=ocr_on)
-                        except Exception as e:
-                            st.error(f"{nome}: erro — {e}")
-                            continue
+    if not (HAS_FITZ and HAS_PDFPLUMBER):
+        st.error("Bibliotecas ausentes no ambiente. Adicione `pymupdf` e `pdfplumber` "
+                 "ao requirements.txt para usar o conversor.")
+    else:
+        ocr_on = st.checkbox(
+            "OCR para páginas escaneadas (mais lento; requer Tesseract no servidor)",
+            value=True,
+            help="Ligado por padrão. Detecta páginas-imagem e aplica OCR. Exige o pacote de "
+                 "sistema tesseract-ocr (packages.txt) e pytesseract+Pillow no requirements.",
+        )
+        ups = st.file_uploader("Selecione um ou mais PDFs", type=["pdf"],
+                               accept_multiple_files=True, key="pdf_conv_up")
+        if ups:
+            if st.button("Converter", type="primary", key="pdf_conv_btn"):
+                for up in ups:
+                    nome = up.name
+                    base = nome[:-4] if nome.lower().endswith(".pdf") else nome
+                    try:
+                        with st.spinner(f"Processando {nome}…"):
+                            data = up.getvalue()
+                            txt, md, info = _converter_pdf(data, nome, usar_ocr=ocr_on)
+                    except Exception as e:
+                        st.error(f"{nome}: erro — {e}")
+                        continue
 
-                        meta = f"{info['paginas']} pág."
-                        if info["usou_ocr"]:
-                            meta += " · OCR usado"
-                        if info["pags_vazias"]:
-                            meta += f" · {info['pags_vazias']} sem texto"
-                        st.markdown(f"**{nome}** — {meta}")
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            st.download_button("⬇️ .txt", txt.encode("utf-8"),
-                                               file_name=f"{base}.txt", mime="text/plain",
-                                               key=f"dl_txt_{base}", use_container_width=True)
-                        with c2:
-                            st.download_button("⬇️ .md", md.encode("utf-8"),
-                                               file_name=f"{base}.md", mime="text/markdown",
-                                               key=f"dl_md_{base}", use_container_width=True)
-                        with st.expander(f"Prévia — {base}.txt", expanded=False):
-                            st.text(txt[:4000] + ("\n…(truncado)" if len(txt) > 4000 else ""))
+                    meta = f"{info['paginas']} pág."
+                    if info["usou_ocr"]:
+                        meta += " · OCR usado"
+                    if info["pags_vazias"]:
+                        meta += f" · {info['pags_vazias']} sem texto"
+                    st.markdown(f"**{nome}** — {meta}")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.download_button("⬇️ .txt", txt.encode("utf-8"),
+                                           file_name=f"{base}.txt", mime="text/plain",
+                                           key=f"dl_txt_{base}", use_container_width=True)
+                    with c2:
+                        st.download_button("⬇️ .md", md.encode("utf-8"),
+                                           file_name=f"{base}.md", mime="text/markdown",
+                                           key=f"dl_md_{base}", use_container_width=True)
+                    with st.expander(f"Prévia — {base}.txt", expanded=False):
+                        st.text(txt[:4000] + ("\n…(truncado)" if len(txt) > 4000 else ""))
 
-    # ── Feed de comunicados CVM ────────────────────────────────
-    with sub[1]:
-        st.markdown("##### Feed de comunicados — Ações BR")
-        st.caption("Comunicados ao Mercado, Fatos Relevantes e Avisos aos Acionistas das "
-                   "empresas da watchlist (grupo BR), via CVM Dados Abertos (IPE).")
 
+def render_feed_comunicados():
+    """Feed de comunicados CVM (IPE) das Ações BR da watchlist.
+    Renderizado no fim da aba Ativos."""
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.markdown('<p class="mon-head">Feed de comunicados — Ações BR</p>',
+                unsafe_allow_html=True)
+    st.caption("Comunicados ao Mercado, Fatos Relevantes e Avisos aos Acionistas das "
+               "empresas da watchlist (grupo BR), via CVM Dados Abertos (IPE).")
+
+    col_d, col_b = st.columns([2, 1])
+    with col_d:
         dias = st.radio("Janela", ["7 dias", "15 dias", "30 dias"], index=0,
-                        horizontal=True, key="cvm_feed_dias")
-        n_dias = {"7 dias": 7, "15 dias": 15, "30 dias": 30}[dias]
-
-        if st.button("Atualizar feed", key="cvm_feed_btn"):
+                        horizontal=True, key="cvm_feed_dias", label_visibility="collapsed")
+    n_dias = {"7 dias": 7, "15 dias": 15, "30 dias": 30}[dias]
+    with col_b:
+        if st.button("Atualizar feed", key="cvm_feed_btn", use_container_width=True):
             st.session_state["cvm_feed_run"] = True
 
-        if st.session_state.get("cvm_feed_run"):
-            wl = st.session_state.get("watchlist") or _load_watchlist()
-            nomes_br = [a.get("name", "") for a in wl if a.get("group") == "BR"]
-            if not nomes_br:
-                st.info("Nenhuma ação BR na watchlist.")
+    if not st.session_state.get("cvm_feed_run"):
+        st.caption("Clique em “Atualizar feed” para carregar os comunicados.")
+        return
+
+    wl = st.session_state.get("watchlist") or _load_watchlist()
+    nomes_br = [a.get("name", "") for a in wl if a.get("group") == "BR"]
+    if not nomes_br:
+        st.info("Nenhuma ação BR na watchlist.")
+        return
+
+    with st.spinner("Baixando base de comunicados da CVM…"):
+        df_ipe, err = _fetch_cvm_ipe()
+    if err:
+        st.error(f"Falha ao obter dados da CVM: {err}")
+        return
+
+    res = _filtrar_ipe_por_empresas(df_ipe, nomes_br, n_dias)
+    if res.empty:
+        st.info(f"Nenhum comunicado nos últimos {n_dias} dias para as empresas da watchlist.")
+        return
+
+    st.caption(f"{len(res)} comunicado(s) · últimos {n_dias} dias · fonte CVM IPE")
+    for nome in nomes_br:
+        grp = res[res["_match"] == nome]
+        if grp.empty:
+            continue
+        st.markdown(f"**{nome}**")
+        linhas = ""
+        for _, r in grp.iterrows():
+            dt = r["_data"].strftime("%d/%m") if pd.notna(r["_data"]) else "—"
+            cat = str(r.get("Categoria", "") or "")
+            assunto = str(r.get("Assunto", "") or "").strip()
+            if assunto and assunto.lower() != "nan":
+                cat = f"{cat} — {assunto}" if cat else assunto
+            link = str(r.get("Link_Download", "") or "")
+            cat_disp = (cat[:120] + "…") if len(cat) > 120 else cat
+            if link.startswith("http"):
+                linhas += (f'<div class="briefing-row"><span class="nm">'
+                           f'<span style="color:var(--text3)">{dt}</span>&nbsp;'
+                           f'<a href="{link}" target="_blank" '
+                           f'style="color:var(--accent)">{cat_disp}</a></span></div>')
             else:
-                with st.spinner("Baixando base de comunicados da CVM…"):
-                    df_ipe, err = _fetch_cvm_ipe()
-                if err:
-                    st.error(f"Falha ao obter dados da CVM: {err}")
-                else:
-                    res = _filtrar_ipe_por_empresas(df_ipe, nomes_br, n_dias)
-                    if res.empty:
-                        st.info(f"Nenhum comunicado nos últimos {n_dias} dias para as empresas da watchlist.")
-                    else:
-                        st.caption(f"{len(res)} comunicado(s) · últimos {n_dias} dias · fonte CVM IPE")
-                        for nome in nomes_br:
-                            grp = res[res["_match"] == nome]
-                            if grp.empty:
-                                continue
-                            st.markdown(f"**{nome}**")
-                            linhas = ""
-                            for _, r in grp.iterrows():
-                                dt = r["_data"].strftime("%d/%m") if pd.notna(r["_data"]) else "—"
-                                cat = str(r.get("Categoria", "") or "")
-                                assunto = str(r.get("Assunto", "") or "").strip()
-                                if assunto and assunto.lower() != "nan":
-                                    cat = f"{cat} — {assunto}" if cat else assunto
-                                link = str(r.get("Link_Download", "") or "")
-                                cat_disp = (cat[:120] + "…") if len(cat) > 120 else cat
-                                if link.startswith("http"):
-                                    linhas += (f'<div class="briefing-row"><span class="nm">'
-                                               f'<span style="color:var(--text3)">{dt}</span>&nbsp;'
-                                               f'<a href="{link}" target="_blank" '
-                                               f'style="color:var(--accent)">{cat_disp}</a></span></div>')
-                                else:
-                                    linhas += (f'<div class="briefing-row"><span class="nm">'
-                                               f'<span style="color:var(--text3)">{dt}</span>&nbsp;{cat_disp}'
-                                               f'</span></div>')
-                            st.markdown(linhas, unsafe_allow_html=True)
-                            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+                linhas += (f'<div class="briefing-row"><span class="nm">'
+                           f'<span style="color:var(--text3)">{dt}</span>&nbsp;{cat_disp}'
+                           f'</span></div>')
+        st.markdown(linhas, unsafe_allow_html=True)
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────
@@ -3337,6 +3346,9 @@ def render_ativos():
             rows,
         )
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+    # Feed de comunicados (CVM) — abaixo de todas as tabelas de ativos
+    render_feed_comunicados()
 
 
 
