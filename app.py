@@ -48,6 +48,18 @@ try:
 except ImportError:
     HAS_BS4 = False
 
+try:
+    import fitz as _fitz  # pymupdf
+    HAS_FITZ = True
+except ImportError:
+    HAS_FITZ = False
+
+try:
+    import pdfplumber as _pdfplumber
+    HAS_PDFPLUMBER = True
+except ImportError:
+    HAS_PDFPLUMBER = False
+
 LIMIAR_BPS_DEFAULT = 10
 
 # ================================================================
@@ -1307,6 +1319,7 @@ def render_conteudo_dinamico(current_calls):
         "Calls NTN-B",
         "FRA",
         "NTN-B ANBIMA",
+        "Ferramentas",
     ])
     with tabs[0]: render_principal(di_data, anbima_df, current_calls, ajuste_locked, prev_bday_ajuste)
     with tabs[1]: render_cvm()
@@ -1318,6 +1331,7 @@ def render_conteudo_dinamico(current_calls):
     with tabs[8]: render_calls(anbima_df, current_calls, save_calls)
     with tabs[9]: render_curva_di(di_data)
     with tabs[10]: render_ntnb_anbima(anbima_df, ref_dt)
+    with tabs[11]: render_ferramentas()
 
 
 # ================================================================
@@ -1415,6 +1429,354 @@ def render_principal(di, anbima, calls, ajuste_locked, prev_bday_ajuste=None):
             title="NTN-B",
             meta=f"ANBIMA · {n} títulos",
         )
+
+
+# ================================================================
+# FERRAMENTAS — utilitários do dia a dia
+# ================================================================
+# Bloco 1: Conversor PDF -> txt / md (pymupdf + pdfplumber, OCR opcional)
+# Bloco 2: Feed de comunicados CVM (IPE) por empresa das Ações BR
+# Portado de extrair_carta.py / interface.py (Bruno), adaptado para
+# rodar em memória no Streamlit Cloud (sem filesystem persistente).
+
+# ─────────────────────────────────────────
+# 1) CONVERSOR PDF
+# ─────────────────────────────────────────
+def _pdf_limpar_texto(texto: str) -> str:
+    """Remove linhas-ruído (igual à lógica original do extrair_carta)."""
+    linhas_limpas = []
+    for linha in texto.split("\n"):
+        linha = linha.strip()
+        if len(linha) < 3:
+            continue
+        if re.match(r"^[\d\s\.\,\%\-]+$", linha) and len(linha) < 15:
+            continue
+        if re.match(r"^[^a-zA-ZÀ-ÿ0-9]+$", linha):
+            continue
+        linhas_limpas.append(linha)
+    return "\n".join(linhas_limpas)
+
+
+def _pdf_extrair_tabelas(pagina_plumber):
+    """Extrai tabelas de uma página pdfplumber como lista de matrizes."""
+    matrizes = []
+    try:
+        tabelas = pagina_plumber.extract_tables()
+    except Exception:
+        return matrizes
+    for tabela in tabelas:
+        if not tabela:
+            continue
+        linhas = []
+        for linha in tabela:
+            if not linha:
+                continue
+            celulas = [str(c).strip() if c else "" for c in linha]
+            if any(celulas):
+                linhas.append(celulas)
+        if linhas:
+            matrizes.append(linhas)
+    return matrizes
+
+
+def _pdf_ocr_pagina(pagina_fitz) -> str:
+    """OCR via pytesseract (fallback p/ páginas escaneadas). Opcional."""
+    try:
+        import pytesseract
+        from PIL import Image
+        mat = _fitz.Matrix(2, 2)
+        pix = pagina_fitz.get_pixmap(matrix=mat)
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        return _pdf_limpar_texto(pytesseract.image_to_string(img, lang="por"))
+    except Exception:
+        return ""
+
+
+def _tabela_para_md(matriz) -> str:
+    """Converte matriz de células em tabela markdown."""
+    if not matriz:
+        return ""
+    ncols = max(len(l) for l in matriz)
+    norm = [l + [""] * (ncols - len(l)) for l in matriz]
+    # 1ª linha como cabeçalho
+    header = norm[0]
+    out = ["| " + " | ".join(c.replace("\n", " ") for c in header) + " |",
+           "| " + " | ".join("---" for _ in header) + " |"]
+    for linha in norm[1:]:
+        out.append("| " + " | ".join(c.replace("\n", " ") for c in linha) + " |")
+    return "\n".join(out)
+
+
+def _converter_pdf(file_bytes: bytes, nome: str, usar_ocr: bool = False):
+    """Processa um PDF em memória. Retorna (txt, md, info).
+    info = dict com paginas, usou_ocr, pags_vazias."""
+    info = {"paginas": 0, "usou_ocr": False, "pags_vazias": 0}
+    if not (HAS_FITZ and HAS_PDFPLUMBER):
+        raise RuntimeError("pymupdf e pdfplumber são necessários para o conversor.")
+
+    doc_fitz = _fitz.open(stream=file_bytes, filetype="pdf")
+    txt_partes = [f"=== {nome} ===\n"]
+    md_partes  = [f"# {nome}\n"]
+
+    with _pdfplumber.open(io.BytesIO(file_bytes)) as doc_plumber:
+        for i, (pf, pp) in enumerate(zip(doc_fitz, doc_plumber.pages)):
+            info["paginas"] = i + 1
+            txt_partes.append(f"\n{'='*50}\nPÁGINA {i+1}\n{'='*50}\n")
+            md_partes.append(f"\n## Página {i+1}\n")
+
+            texto = _pdf_limpar_texto(pf.get_text("text"))
+            if not texto.strip() and usar_ocr:
+                ocr = _pdf_ocr_pagina(pf)
+                if ocr.strip():
+                    texto = ocr
+                    info["usou_ocr"] = True
+                    txt_partes.append("[OCR]")
+                    md_partes.append("> _Página extraída via OCR_\n")
+                else:
+                    info["pags_vazias"] += 1
+            elif not texto.strip():
+                info["pags_vazias"] += 1
+
+            if texto.strip():
+                txt_partes.append(texto)
+                md_partes.append(texto)
+
+            tabelas = _pdf_extrair_tabelas(pp)
+            if tabelas:
+                txt_partes.append("\n--- TABELAS ---")
+                md_partes.append("\n**Tabelas:**\n")
+                for j, t in enumerate(tabelas):
+                    linhas_txt = [" | ".join(l) for l in t]
+                    txt_partes.append(f"\n[TABELA {j+1}]\n" + "\n".join(linhas_txt) + f"\n[/TABELA {j+1}]")
+                    md_partes.append("\n" + _tabela_para_md(t) + "\n")
+
+    doc_fitz.close()
+
+    cab = []
+    if info["usou_ocr"]:
+        cab.append("[AVISO: OCR usado em páginas escaneadas — confira a qualidade]\n")
+    if info["pags_vazias"] > 0:
+        cab.append(f"[AVISO: {info['pags_vazias']} página(s) sem texto extraível]\n")
+    txt = "\n".join(cab + txt_partes)
+    md  = "\n".join((["> " + c for c in cab]) + md_partes)
+    return txt, md, info
+
+
+def render_ferramentas():
+    st.markdown('<div class="aux-tab-banner">🛠️ Ferramentas — utilitários do dia a dia</div>',
+                unsafe_allow_html=True)
+
+    sub = st.tabs(["Conversor PDF → txt/md", "Feed de comunicados (CVM)"])
+
+    # ── Conversor PDF ──────────────────────────────────────────
+    with sub[0]:
+        st.markdown("##### Conversor de PDF")
+        st.caption("Extrai texto (pymupdf) e tabelas (pdfplumber) de PDFs. "
+                   "Gera .txt e .md para download. Tudo em memória — nada é salvo no servidor.")
+
+        if not (HAS_FITZ and HAS_PDFPLUMBER):
+            st.error("Bibliotecas ausentes no ambiente. Adicione `pymupdf` e `pdfplumber` "
+                     "ao requirements.txt para usar o conversor.")
+        else:
+            ocr_on = st.checkbox(
+                "Ativar OCR para páginas escaneadas (mais lento; requer Tesseract no servidor)",
+                value=False,
+                help="Use só se algum PDF for imagem/escaneado. Exige o pacote de sistema "
+                     "tesseract-ocr (packages.txt) e pytesseract+Pillow no requirements.",
+            )
+            ups = st.file_uploader("Selecione um ou mais PDFs", type=["pdf"],
+                                   accept_multiple_files=True, key="pdf_conv_up")
+            if ups:
+                if st.button("Converter", type="primary", key="pdf_conv_btn"):
+                    for up in ups:
+                        nome = up.name
+                        base = nome[:-4] if nome.lower().endswith(".pdf") else nome
+                        try:
+                            with st.spinner(f"Processando {nome}…"):
+                                data = up.getvalue()
+                                txt, md, info = _converter_pdf(data, nome, usar_ocr=ocr_on)
+                        except Exception as e:
+                            st.error(f"{nome}: erro — {e}")
+                            continue
+
+                        meta = f"{info['paginas']} pág."
+                        if info["usou_ocr"]:
+                            meta += " · OCR usado"
+                        if info["pags_vazias"]:
+                            meta += f" · {info['pags_vazias']} sem texto"
+                        st.markdown(f"**{nome}** — {meta}")
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            st.download_button("⬇️ .txt", txt.encode("utf-8"),
+                                               file_name=f"{base}.txt", mime="text/plain",
+                                               key=f"dl_txt_{base}", use_container_width=True)
+                        with c2:
+                            st.download_button("⬇️ .md", md.encode("utf-8"),
+                                               file_name=f"{base}.md", mime="text/markdown",
+                                               key=f"dl_md_{base}", use_container_width=True)
+                        with st.expander(f"Prévia — {base}.txt", expanded=False):
+                            st.text(txt[:4000] + ("\n…(truncado)" if len(txt) > 4000 else ""))
+
+    # ── Feed de comunicados CVM ────────────────────────────────
+    with sub[1]:
+        st.markdown("##### Feed de comunicados — Ações BR")
+        st.caption("Comunicados ao Mercado, Fatos Relevantes e Avisos aos Acionistas das "
+                   "empresas da watchlist (grupo BR), via CVM Dados Abertos (IPE).")
+
+        dias = st.radio("Janela", ["7 dias", "15 dias", "30 dias"], index=0,
+                        horizontal=True, key="cvm_feed_dias")
+        n_dias = {"7 dias": 7, "15 dias": 15, "30 dias": 30}[dias]
+
+        if st.button("Atualizar feed", key="cvm_feed_btn"):
+            st.session_state["cvm_feed_run"] = True
+
+        if st.session_state.get("cvm_feed_run"):
+            wl = st.session_state.get("watchlist") or _load_watchlist()
+            nomes_br = [a.get("name", "") for a in wl if a.get("group") == "BR"]
+            if not nomes_br:
+                st.info("Nenhuma ação BR na watchlist.")
+            else:
+                with st.spinner("Baixando base de comunicados da CVM…"):
+                    df_ipe, err = _fetch_cvm_ipe()
+                if err:
+                    st.error(f"Falha ao obter dados da CVM: {err}")
+                else:
+                    res = _filtrar_ipe_por_empresas(df_ipe, nomes_br, n_dias)
+                    if res.empty:
+                        st.info(f"Nenhum comunicado nos últimos {n_dias} dias para as empresas da watchlist.")
+                    else:
+                        st.caption(f"{len(res)} comunicado(s) · últimos {n_dias} dias · fonte CVM IPE")
+                        for nome in nomes_br:
+                            grp = res[res["_match"] == nome]
+                            if grp.empty:
+                                continue
+                            st.markdown(f"**{nome}**")
+                            linhas = ""
+                            for _, r in grp.iterrows():
+                                dt = r["_data"].strftime("%d/%m") if pd.notna(r["_data"]) else "—"
+                                cat = str(r.get("Categoria", "") or "")
+                                assunto = str(r.get("Assunto", "") or "").strip()
+                                if assunto and assunto.lower() != "nan":
+                                    cat = f"{cat} — {assunto}" if cat else assunto
+                                link = str(r.get("Link_Download", "") or "")
+                                cat_disp = (cat[:120] + "…") if len(cat) > 120 else cat
+                                if link.startswith("http"):
+                                    linhas += (f'<div class="briefing-row"><span class="nm">'
+                                               f'<span style="color:var(--text3)">{dt}</span>&nbsp;'
+                                               f'<a href="{link}" target="_blank" '
+                                               f'style="color:var(--accent)">{cat_disp}</a></span></div>')
+                                else:
+                                    linhas += (f'<div class="briefing-row"><span class="nm">'
+                                               f'<span style="color:var(--text3)">{dt}</span>&nbsp;{cat_disp}'
+                                               f'</span></div>')
+                            st.markdown(linhas, unsafe_allow_html=True)
+                            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────
+# 2) FETCH CVM IPE (comunicados/fatos relevantes)
+# ─────────────────────────────────────────
+_CVM_IPE_URL_TMPL = ("https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/IPE/DADOS/"
+                     "ipe_cia_aberta_{ano}.zip")
+
+# Categorias relevantes p/ um feed de "notícias" de ações
+_IPE_CATEGORIAS_FEED = {
+    "fato relevante",
+    "comunicado ao mercado",
+    "aviso aos acionistas",
+}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _fetch_cvm_ipe():
+    """Baixa o CSV IPE do ano corrente (CVM Dados Abertos). Retorna (df, err)."""
+    ano = _brt_date().year
+    url = _CVM_IPE_URL_TMPL.format(ano=ano)
+    try:
+        r = requests.get(url, timeout=90, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+            target = next((n for n in z.namelist() if n.lower().endswith(".csv")), None)
+            if target is None:
+                return None, "Nenhum CSV no ZIP"
+            with z.open(target) as f:
+                df = pd.read_csv(f, encoding="latin-1", sep=";",
+                                 dtype=str, on_bad_lines="skip", low_memory=False)
+        df.columns = [c.strip() for c in df.columns]
+        return df, None
+    except Exception as e:
+        return None, str(e)
+
+
+def _norm_txt(s: str) -> str:
+    """Normaliza para casamento (maiúsculas, sem acento, sem sufixos S.A.)."""
+    import unicodedata
+    s = str(s or "").upper().strip()
+    s = "".join(c for c in unicodedata.normalize("NFD", s)
+                if unicodedata.category(c) != "Mn")
+    s = re.sub(r"\b(S\.?A\.?|SA|ON|PN|HOLDING|PARTICIPACOES|CIA|COMPANHIA)\b", " ", s)
+    s = re.sub(r"[^A-Z0-9 ]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _filtrar_ipe_por_empresas(df, nomes_empresas, n_dias):
+    """Filtra o IPE pelas empresas (match aproximado por nome) e janela de dias.
+    Adiciona colunas auxiliares _data (datetime) e _match (nome da watchlist)."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    col_nome = next((c for c in df.columns if c.lower() in
+                     ("nome_companhia", "nome_companhia_b3", "denom_social")), None)
+    col_cat = next((c for c in df.columns if c.lower() == "categoria"), None)
+    col_data = next((c for c in df.columns if c.lower() in
+                     ("data_entrega", "data_referencia")), None)
+    if not (col_nome and col_data):
+        return pd.DataFrame()
+
+    work = df.copy()
+    work["_data"] = pd.to_datetime(work[col_data], errors="coerce")
+    corte = pd.Timestamp(_brt_date()) - pd.Timedelta(days=n_dias)
+    work = work[work["_data"] >= corte]
+
+    # filtra categorias relevantes (se a coluna existir)
+    if col_cat:
+        work = work[work[col_cat].astype(str).str.lower().str.strip()
+                    .isin(_IPE_CATEGORIAS_FEED)]
+    if work.empty:
+        return pd.DataFrame()
+
+    work["_nome_norm"] = work[col_nome].apply(_norm_txt)
+    alvos = {nome: _norm_txt(nome) for nome in nomes_empresas}
+
+    def _match_row(nome_norm):
+        for nome_orig, alvo in alvos.items():
+            if not alvo:
+                continue
+            primeiro = alvo.split(" ")[0]
+            if alvo in nome_norm or nome_norm in alvo or \
+               (len(primeiro) >= 4 and primeiro in nome_norm):
+                return nome_orig
+        return None
+
+    work["_match"] = work["_nome_norm"].apply(_match_row)
+    work = work[work["_match"].notna()]
+    if work.empty:
+        return pd.DataFrame()
+
+    # padroniza nomes de colunas de saída esperados pelo render
+    ren = {}
+    if col_cat:
+        ren[col_cat] = "Categoria"
+    col_assunto = next((c for c in df.columns if c.lower() == "assunto"), None)
+    if col_assunto:
+        ren[col_assunto] = "Assunto"
+    col_link = next((c for c in df.columns if c.lower() in
+                     ("link_download", "linkdownload")), None)
+    if col_link:
+        ren[col_link] = "Link_Download"
+    work = work.rename(columns=ren)
+
+    return work.sort_values("_data", ascending=False)
 
 
 def render_curva_di(di):
@@ -3409,15 +3771,11 @@ def compute_run_premio(rtype):
 
 
 def compute_run_movement(rtype):
-    """Movimentação D/D: mid do run mais recente vs run de 1 dia útil atrás
-    (D-1, respeitando feriados via calendário ANBIMA), por ativo."""
+    """Movimentação D/D: mid do run mais recente vs run anterior, por ativo."""
     dates = load_run_dates(rtype)
     if len(dates) < 2:
         return None
-    prev_date = pick_prev_run_date(dates, 1)
-    if prev_date is None:
-        return None
-    cur, prev = load_run_on(rtype, dates[0]), load_run_on(rtype, prev_date)
+    cur, prev = load_run_on(rtype, dates[0]), load_run_on(rtype, dates[1])
     if cur is None or prev is None:
         return None
     cur = cur.copy(); prev = prev.copy()
@@ -3435,7 +3793,7 @@ def compute_run_movement(rtype):
     if j.empty:
         return None
     j["delta_bps"] = (j["mid"] - j["mid_p"]) * 100
-    return {"cur": dates[0], "prev": prev_date, "df": j}
+    return {"cur": dates[0], "prev": dates[1], "df": j}
 
 
 def _compute_top_movers(run_type, n_du: int = 1):
@@ -4864,15 +5222,13 @@ def render_briefing_credito(anbima_df):
         dev_col  = _find_col(df_sre, "Identificacao_devedores_coobrigados")
         vol_col  = _find_col(df_sre, "Valor_Total_Registrado")
 
-        # D-1 (1 dia útil antes) até D0, respeitando feriados (calendário ANBIMA)
-        _hoje = _brt_date()
-        _d0_dt = _hoje if is_bday(_hoje) else _target_date_n_du_back(_hoje + timedelta(days=1), 1)
-        _d1_dt = _target_date_n_du_back(_d0_dt, 1)
-        _d0 = pd.Timestamp(_d0_dt).normalize()
-        _d1 = pd.Timestamp(_d1_dt).normalize()
+        # D-1 até D0
+        _d0 = pd.Timestamp(_brt_date())
+        _d1 = _d0 - pd.Timedelta(days=1)
         if date_col:
-            _col_dt = pd.to_datetime(df_sre[date_col], errors="coerce").dt.normalize()
-            novas = df_sre[(_col_dt >= _d1) & (_col_dt <= _d0)].copy()
+            novas = df_sre[
+                (df_sre[date_col] >= _d1) & (df_sre[date_col] <= _d0)
+            ].copy()
         else:
             novas = df_sre.head(10).copy()
         data_txt = f"{_d1.strftime('%d/%m')}–{_d0.strftime('%d/%m')}"
@@ -4885,7 +5241,8 @@ def render_briefing_credito(anbima_df):
         # Pipeline por segmento (mantém para a síntese)
         pipeline = _sre_pipeline_por_segmento(df_sre)
 
-        def _sre_row(r):
+        rows_html = ""
+        for _, r in novas.head(7).iterrows():
             emissor = (str(r[emis_col]) if emis_col and pd.notna(r.get(emis_col)) else "—")[:40]
             tipo    = str(r[tipo_col]) if tipo_col and pd.notna(r.get(tipo_col)) else "—"
             # Para CRI/CRA/CR mostra o devedor no lugar do emissor (securitizadora)
@@ -4897,7 +5254,7 @@ def render_briefing_credito(anbima_df):
                     emissor = dev_val[:40]
             vol_raw = r.get(vol_col) if vol_col else None
             vol_txt = (f"R$ {vol_raw/1e6:.0f}M" if pd.notna(vol_raw) and vol_raw else "—")
-            return (
+            rows_html += (
                 f'<div class="briefing-row">'
                 f'<span class="nm">{emissor}</span>'
                 f'<span class="dl">'
@@ -4905,22 +5262,8 @@ def render_briefing_credito(anbima_df):
                 f'</span>'
                 f'</div>'
             )
-
-        # Até 14 ofertas em duas colunas (no máx. 7 por coluna)
-        novas14 = novas.head(14)
-        col_esq = "".join(_sre_row(r) for _, r in novas14.iloc[:7].iterrows())
-        col_dir = "".join(_sre_row(r) for _, r in novas14.iloc[7:14].iterrows())
-        if not col_esq and not col_dir:
+        if not rows_html:
             rows_html = '<span style="color:var(--text3);font-size:12px">sem ofertas no período</span>'
-        elif not col_dir:
-            rows_html = col_esq
-        else:
-            rows_html = (
-                f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'
-                f'<div>{col_esq}</div>'
-                f'<div>{col_dir}</div>'
-                f'</div>'
-            )
 
         return rows_html, pipeline, None, data_txt
 
