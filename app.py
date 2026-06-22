@@ -1565,54 +1565,376 @@ def _converter_pdf(file_bytes: bytes, nome: str, usar_ocr: bool = False):
 def render_ferramentas():
     st.markdown('<div class="aux-tab-banner">🛠️ Ferramentas — utilitários do dia a dia</div>',
                 unsafe_allow_html=True)
+    sub = st.tabs([
+        "Conversor PDF", "Consolidador", "Calculadora de bond",
+        "Conversor de taxas", "Cartas FII", "Busca CVM",
+    ])
+    with sub[0]: _ferr_conversor_pdf()
+    with sub[1]: _ferr_consolidador()
+    with sub[2]: _ferr_calculadora_bond()
+    with sub[3]: _ferr_conversor_taxas()
+    with sub[4]: _ferr_cartas_fii()
+    with sub[5]: _ferr_busca_cvm()
 
-    # ── Conversor PDF ──────────────────────────────────────────
+
+# ── 1) Conversor PDF ───────────────────────────────────────────
+def _ferr_conversor_pdf():
     st.markdown("##### Conversor de PDF → txt/md")
     st.caption("Extrai texto (pymupdf) e tabelas (pdfplumber) de PDFs. "
                "Gera .txt e .md para download. Tudo em memória — nada é salvo no servidor.")
-
     if not (HAS_FITZ and HAS_PDFPLUMBER):
-        st.error("Bibliotecas ausentes no ambiente. Adicione `pymupdf` e `pdfplumber` "
-                 "ao requirements.txt para usar o conversor.")
-    else:
-        ocr_on = st.checkbox(
-            "OCR para páginas escaneadas (mais lento; requer Tesseract no servidor)",
-            value=True,
-            help="Ligado por padrão. Detecta páginas-imagem e aplica OCR. Exige o pacote de "
-                 "sistema tesseract-ocr (packages.txt) e pytesseract+Pillow no requirements.",
-        )
-        ups = st.file_uploader("Selecione um ou mais PDFs", type=["pdf"],
-                               accept_multiple_files=True, key="pdf_conv_up")
-        if ups:
-            if st.button("Converter", type="primary", key="pdf_conv_btn"):
-                for up in ups:
-                    nome = up.name
-                    base = nome[:-4] if nome.lower().endswith(".pdf") else nome
-                    try:
-                        with st.spinner(f"Processando {nome}…"):
-                            data = up.getvalue()
-                            txt, md, info = _converter_pdf(data, nome, usar_ocr=ocr_on)
-                    except Exception as e:
-                        st.error(f"{nome}: erro — {e}")
-                        continue
+        st.error("Bibliotecas ausentes. Adicione `pymupdf` e `pdfplumber` ao requirements.txt.")
+        return
+    ocr_on = st.checkbox(
+        "OCR para páginas escaneadas (mais lento; requer Tesseract no servidor)",
+        value=True,
+        help="Ligado por padrão. Detecta páginas-imagem e aplica OCR. Exige tesseract-ocr "
+             "(packages.txt) e pytesseract+Pillow no requirements.",
+    )
+    ups = st.file_uploader("Selecione um ou mais PDFs", type=["pdf"],
+                           accept_multiple_files=True, key="pdf_conv_up")
+    if ups and st.button("Converter", type="primary", key="pdf_conv_btn"):
+        for up in ups:
+            nome = up.name
+            base = nome[:-4] if nome.lower().endswith(".pdf") else nome
+            try:
+                with st.spinner(f"Processando {nome}…"):
+                    txt, md, info = _converter_pdf(up.getvalue(), nome, usar_ocr=ocr_on)
+            except Exception as e:
+                st.error(f"{nome}: erro — {e}")
+                continue
+            meta = f"{info['paginas']} pág."
+            if info["usou_ocr"]:
+                meta += " · OCR usado"
+            if info["pags_vazias"]:
+                meta += f" · {info['pags_vazias']} sem texto"
+            st.markdown(f"**{nome}** — {meta}")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.download_button("⬇️ .txt", txt.encode("utf-8"), file_name=f"{base}.txt",
+                                   mime="text/plain", key=f"dl_txt_{base}", use_container_width=True)
+            with c2:
+                st.download_button("⬇️ .md", md.encode("utf-8"), file_name=f"{base}.md",
+                                   mime="text/markdown", key=f"dl_md_{base}", use_container_width=True)
+            with st.expander(f"Prévia — {base}.txt", expanded=False):
+                st.text(txt[:4000] + ("\n…(truncado)" if len(txt) > 4000 else ""))
 
-                    meta = f"{info['paginas']} pág."
-                    if info["usou_ocr"]:
-                        meta += " · OCR usado"
-                    if info["pags_vazias"]:
-                        meta += f" · {info['pags_vazias']} sem texto"
-                    st.markdown(f"**{nome}** — {meta}")
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.download_button("⬇️ .txt", txt.encode("utf-8"),
-                                           file_name=f"{base}.txt", mime="text/plain",
-                                           key=f"dl_txt_{base}", use_container_width=True)
-                    with c2:
-                        st.download_button("⬇️ .md", md.encode("utf-8"),
-                                           file_name=f"{base}.md", mime="text/markdown",
-                                           key=f"dl_md_{base}", use_container_width=True)
-                    with st.expander(f"Prévia — {base}.txt", expanded=False):
-                        st.text(txt[:4000] + ("\n…(truncado)" if len(txt) > 4000 else ""))
+
+# ── 2) Consolidador TXT/MD ─────────────────────────────────────
+def _ferr_consolidador():
+    st.markdown("##### Consolidador de TXT/MD")
+    st.caption("Junta vários arquivos .txt/.md num único consolidado com separadores "
+               "(formato do pipeline FIIs: # FUNDO: TICKER | período). Nomeie os arquivos "
+               "como TICKER_PERIODO.txt para o ticker e período serem detectados.")
+    ups = st.file_uploader("Arquivos .txt / .md", type=["txt", "md"],
+                           accept_multiple_files=True, key="consol_up")
+    if ups and st.button("Consolidar", type="primary", key="consol_btn"):
+        itens = []
+        for up in ups:
+            try:
+                conteudo = up.getvalue().decode("utf-8", errors="replace")
+            except Exception:
+                conteudo = up.getvalue().decode("latin-1", errors="replace")
+            itens.append((up.name, conteudo))
+        consolidado = _consolidar_textos(itens)
+        nome_out = f"consolidado_{_brt_date().strftime('%Y%m%d')}.md"
+        st.success(f"{len(itens)} documento(s) consolidados · {len(consolidado)//1024} KB")
+        st.download_button("⬇️ Baixar consolidado (.md)", consolidado.encode("utf-8"),
+                           file_name=nome_out, mime="text/markdown",
+                           key="consol_dl", use_container_width=True)
+        with st.expander("Prévia", expanded=False):
+            st.text(consolidado[:4000] + ("\n…(truncado)" if len(consolidado) > 4000 else ""))
+
+
+# ── 3) Calculadora de bond / debênture ─────────────────────────
+def _ferr_calculadora_bond():
+    st.markdown("##### Calculadora de bond / debênture")
+    st.caption("Monta o cronograma de pagamentos e calcula PU, duration de Macaulay e "
+               "duration modificada. Suporta Bullet, SAC e Price com periodicidade configurável.")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        principal = st.number_input("Principal (R$)", value=1000.0, min_value=0.01,
+                                    step=100.0, key="bond_principal")
+        sistema = st.selectbox("Amortização", ["BULLET", "SAC", "PRICE"], key="bond_sist")
+    with c2:
+        taxa = st.number_input("Taxa (% a.a., base 252)", value=12.0, step=0.25, key="bond_taxa")
+        period_lbl = st.selectbox("Periodicidade", ["Mensal", "Trimestral", "Semestral", "Anual"],
+                                  index=2, key="bond_period")
+    with c3:
+        emissao = st.date_input("Emissão", value=_brt_date(), key="bond_emiss")
+        venc = st.date_input("Vencimento", value=date(_brt_date().year + 5,
+                             _brt_date().month, min(_brt_date().day, 28)), key="bond_venc")
+    period_m = {"Mensal": 1, "Trimestral": 3, "Semestral": 6, "Anual": 12}[period_lbl]
+    carencia = st.number_input("Carência de amortização (meses, só juros)", value=0,
+                               min_value=0, step=6, key="bond_carencia")
+
+    if venc <= emissao:
+        st.warning("Vencimento deve ser depois da emissão.")
+        return
+
+    cron = _gerar_cronograma(principal, taxa, emissao, venc, sistema, period_m, int(carencia))
+    met = _metricas_cronograma(principal, cron, taxa)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("PV (PU)", f"R$ {met['pv']:,.2f}")
+    m2.metric("Duration (Macaulay)", f"{met['macaulay']:.2f} a" if met['macaulay'] else "—")
+    m3.metric("Duration modificada", f"{met['modificada']:.2f}" if met['modificada'] else "—")
+    m4.metric("Nº pagamentos", f"{len(cron)}")
+
+    df_cron = pd.DataFrame([{
+        "Data": c["data"].strftime("%d/%m/%Y"),
+        "Anos": f"{c['t_anos']:.2f}",
+        "Juros": f"{c['juros']:,.2f}",
+        "Amortização": f"{c['amort']:,.2f}",
+        "Fluxo": f"{c['fluxo']:,.2f}",
+        "Saldo": f"{c['saldo_pos']:,.2f}",
+    } for c in cron])
+    st.dataframe(df_cron, use_container_width=True, hide_index=True)
+    st.download_button("⬇️ Cronograma (CSV)",
+                       df_cron.to_csv(index=False, sep=";").encode("utf-8-sig"),
+                       file_name="cronograma.csv", mime="text/csv", key="bond_csv")
+
+    # ── Opcional: cash sweep com recebíveis ──
+    with st.expander("💧 Cash sweep com fluxo de recebíveis (opcional)", expanded=False):
+        st.caption("Para CRI/CRA pulverizado: a cada pagamento entra um valor de recebível. "
+                   "Paga-se primeiro os juros; o sweep aplica o excedente na amortização. "
+                   "Juros não cobertos capitalizam (shortfall).")
+        cs1, cs2 = st.columns(2)
+        with cs1:
+            rec_val = st.number_input("Recebível por período (R$)", value=120.0,
+                                      min_value=0.0, step=10.0, key="cs_rec")
+        with cs2:
+            sweep_pct = st.slider("% do excedente em amortização (sweep)", 0, 100, 100,
+                                  key="cs_sweep")
+        datas = [c["data"] for c in cron]
+        cs_cron, quita, short = _aplicar_cash_sweep(principal, taxa, emissao, datas,
+                                                    rec_val, sweep_pct)
+        q1, q2 = st.columns(2)
+        q1.metric("Quitação", quita.strftime("%d/%m/%Y") if quita else "não quita na janela")
+        q2.metric("Shortfall acum. de juros", f"R$ {short:,.2f}")
+        df_cs = pd.DataFrame([{
+            "Data": c["data"].strftime("%d/%m/%Y"),
+            "Recebível": f"{c['recebivel']:,.2f}",
+            "Juros": f"{c['juros']:,.2f}",
+            "Juros pago": f"{c['juros_pago']:,.2f}",
+            "Shortfall": f"{c['shortfall']:,.2f}",
+            "Amortização": f"{c['amort']:,.2f}",
+            "Saldo": f"{c['saldo_pos']:,.2f}",
+        } for c in cs_cron])
+        st.dataframe(df_cs, use_container_width=True, hide_index=True)
+
+
+# ── 4) Conversor de taxas ──────────────────────────────────────
+def _ferr_conversor_taxas():
+    st.markdown("##### Conversor de taxas")
+    st.caption("Conversões usuais de mesa: a.a.↔a.m. (base 252), % do CDI ↔ CDI+spread, "
+               "e CDI+ ↔ IPCA+ (mantendo a taxa nominal equivalente).")
+
+    st.markdown("**Anual ↔ Mensal (base 252)**")
+    t1, t2 = st.columns(2)
+    with t1:
+        aa = st.number_input("% a.a.", value=12.0, step=0.25, key="cv_aa")
+        st.caption(f"→ {_aa_para_am(aa):.4f}% a.m.")
+    with t2:
+        am = st.number_input("% a.m.", value=0.9489, step=0.05, key="cv_am")
+        st.caption(f"→ {_am_para_aa(am):.4f}% a.a.")
+
+    st.markdown("---")
+    st.markdown("**% do CDI ↔ CDI+spread**")
+    cdi = st.number_input("CDI de referência (% a.a.)", value=10.50, step=0.25, key="cv_cdi")
+    p1, p2 = st.columns(2)
+    with p1:
+        pct = st.number_input("% do CDI", value=110.0, step=1.0, key="cv_pct")
+        st.caption(f"→ taxa absoluta {_cdi_pct_para_spread(cdi, pct):.4f}% a.a.")
+    with p2:
+        spr = st.number_input("CDI + spread (% a.a.)", value=2.0, step=0.10, key="cv_spr")
+        _r = _cdi_mais_para_pct(cdi, spr)
+        st.caption(f"→ {_r:.2f}% do CDI" if _r else "→ —")
+
+    st.markdown("---")
+    st.markdown("**CDI+ ↔ IPCA+** (taxa nominal equivalente)")
+    i1, i2, i3 = st.columns(3)
+    with i1:
+        ipca = st.number_input("IPCA projetado (% a.a.)", value=4.0, step=0.25, key="cv_ipca")
+    with i2:
+        scdi = st.number_input("Spread sobre CDI (% a.a.)", value=3.0, step=0.10, key="cv_scdi")
+        st.caption(f"CDI+{scdi:.2f}% → IPCA+{_converter_cdi_ipca('cdi_para_ipca', scdi, cdi, ipca):.2f}%")
+    with i3:
+        sipca = st.number_input("Spread real sobre IPCA (% a.a.)", value=7.0, step=0.10, key="cv_sipca")
+        st.caption(f"IPCA+{sipca:.2f}% → CDI+{_converter_cdi_ipca('ipca_para_cdi', sipca, cdi, ipca):.2f}%")
+    st.caption("Premissa: taxa nominal = (1+CDI)·(1+spread) = (1+IPCA)·(1+spread_real). "
+               "Resultado depende da projeção de IPCA informada.")
+
+
+# ── 5) Cartas FII ──────────────────────────────────────────────
+def _ferr_cartas_fii():
+    st.markdown("##### Cartas de FII — relatoriosfiis.com.br")
+    st.caption(f"Monitora as cartas mais recentes de {len(FII_TICKERS)} fundos. "
+               "Baixa as não lidas, extrai e consolida num .md pronto para análise.")
+
+    if not HAS_BS4:
+        st.error("beautifulsoup4 ausente no ambiente.")
+        return
+    if not (HAS_FITZ and HAS_PDFPLUMBER):
+        st.warning("pymupdf/pdfplumber ausentes — o download funciona, mas a extração não.")
+
+    cfg_gh = _gh_cfg()
+    if not cfg_gh:
+        st.info("Sem credenciais GitHub em st.secrets — o controle de 'lidas' valerá só "
+                "para esta sessão (zera ao recarregar).")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔍 Verificar cartas novas da semana", key="fii_check",
+                     use_container_width=True):
+            st.session_state["fii_check_run"] = True
+    with col2:
+        if st.button("⬇️ Baixar não lidas → consolidar .md", key="fii_dl",
+                     type="primary", use_container_width=True):
+            st.session_state["fii_dl_run"] = True
+
+    # Verificação: lista o mais recente por fundo e marca o que é novo
+    if st.session_state.get("fii_check_run"):
+        lidas = _carregar_lidas()
+        linhas = ""
+        novas = 0
+        prog_v = st.progress(0.0, text="Consultando o site…")
+        for i, tk in enumerate(FII_TICKERS):
+            prog_v.progress((i + 1) / len(FII_TICKERS), text=f"{tk}…")
+            data_ref, url, err = _relfiis_mais_recente(tk)
+            if err or not data_ref:
+                linhas += (f'<div class="briefing-row"><span class="nm">{tk} '
+                           f'<span style="color:var(--text3)">— {err or "sem dados"}</span>'
+                           f'</span></div>')
+                continue
+            chave = f"{tk}|{data_ref}"
+            is_nova = chave not in lidas
+            if is_nova:
+                novas += 1
+            badge = ('<span class="cr-chip up">NOVA</span>' if is_nova
+                     else '<span style="color:var(--text3);font-size:11px">lida</span>')
+            linhas += (f'<div class="briefing-row"><span class="nm">{tk} '
+                       f'<span style="color:var(--text3)">{data_ref}</span> {badge}'
+                       f'</span></div>')
+        prog_v.empty()
+        st.markdown(f"**{novas} carta(s) nova(s)** de {len(FII_TICKERS)} fundos")
+        st.markdown(linhas, unsafe_allow_html=True)
+
+    # Download + extração + consolidação
+    if st.session_state.get("fii_dl_run"):
+        st.session_state["fii_dl_run"] = False
+        lidas = _carregar_lidas()
+        novas_chaves = []
+        itens = []
+        prog = st.progress(0.0, text="Iniciando…")
+        falhas = []
+        for i, tk in enumerate(FII_TICKERS):
+            prog.progress((i + 1) / len(FII_TICKERS), text=f"{tk}…")
+            data_ref, url, err = _relfiis_mais_recente(tk)
+            if err or not url or not data_ref:
+                falhas.append(f"{tk}: {err or 'sem link'}")
+                continue
+            chave = f"{tk}|{data_ref}"
+            if chave in lidas:
+                continue  # já lida
+            pdf_bytes, errd = _relfiis_baixar_pdf(url)
+            if errd or not pdf_bytes:
+                falhas.append(f"{tk}: {errd or 'download falhou'}")
+                continue
+            periodo = data_ref.replace("/", "")
+            nome = f"{tk}_{periodo}.pdf"
+            if HAS_FITZ and HAS_PDFPLUMBER:
+                try:
+                    _txt, _md, _info = _converter_pdf(pdf_bytes, nome, usar_ocr=True)
+                    itens.append((f"{tk}_{periodo}.md", _txt))  # usa txt limpo p/ consolidado
+                    novas_chaves.append(chave)
+                except Exception as e:
+                    falhas.append(f"{tk}: extração — {e}")
+            else:
+                falhas.append(f"{tk}: extração indisponível")
+        prog.empty()
+
+        if not itens:
+            st.info("Nenhuma carta nova para consolidar.")
+            if falhas:
+                with st.expander("Detalhes"):
+                    st.write(falhas)
+        else:
+            consolidado = _consolidar_textos(itens)
+            nome_out = f"cartas_fii_{_brt_date().strftime('%Y%m%d')}.md"
+            st.success(f"{len(itens)} carta(s) nova(s) consolidada(s).")
+            st.download_button("⬇️ Baixar consolidado (.md)", consolidado.encode("utf-8"),
+                               file_name=nome_out, mime="text/markdown",
+                               key="fii_consol_dl", use_container_width=True)
+            st.text_area("Copiar para colar no Claude", consolidado, height=240,
+                         key="fii_consol_txt")
+            # marca como lidas (persiste no GitHub se houver credenciais)
+            todas = set(lidas) | set(novas_chaves)
+            salvou = _salvar_lidas(todas)
+            st.caption("Marcadas como lidas e persistidas no GitHub."
+                       if salvou else "Marcadas como lidas nesta sessão (sem GitHub).")
+            if falhas:
+                with st.expander(f"{len(falhas)} fundo(s) com problema"):
+                    st.write(falhas)
+
+
+# ── 6) Busca em ofertas CVM ────────────────────────────────────
+def _ferr_busca_cvm():
+    st.markdown("##### Busca em ofertas CVM (SRE)")
+    st.caption("Busca livre por devedor, emissor ou líder nas ofertas registradas que o "
+               "dashboard já consome da CVM (Resolução 160).")
+    termo = st.text_input("Termo (devedor / emissor / coordenador)", key="bcvm_termo",
+                          placeholder="ex.: Colmeia, Direcional, Itaú…")
+    if not termo or len(termo.strip()) < 2:
+        st.caption("Digite ao menos 2 caracteres.")
+        return
+    with st.spinner("Carregando ofertas da CVM…"):
+        df, err = fetch_cvm_sre()
+    if err or df is None:
+        st.error(f"Falha ao obter dados da CVM: {err}")
+        return
+
+    termo_n = _norm_txt(termo)
+    cols_busca = [c for c in df.columns if c in (
+        "Nome_Emissor", "Identificacao_devedores_coobrigados", "Nome_Lider",
+        "Valor_Mobiliario", "Tipo")]
+    if not cols_busca:
+        st.warning("Colunas esperadas não encontradas no arquivo.")
+        return
+
+    def _row_match(r):
+        for c in cols_busca:
+            if termo_n in _norm_txt(r.get(c, "")):
+                return True
+        return False
+
+    res = df[df.apply(_row_match, axis=1)].copy()
+    if res.empty:
+        st.info(f"Nenhuma oferta encontrada para “{termo}”.")
+        return
+
+    date_col = _find_col(res, "Data_requerimento")
+    if date_col:
+        res = res.sort_values(date_col, ascending=False)
+    st.caption(f"{len(res)} oferta(s) encontrada(s)")
+
+    emis_col = _find_col(res, "Nome_Emissor")
+    dev_col = _find_col(res, "Identificacao_devedores_coobrigados")
+    lider_col = _find_col(res, "Nome_Lider")
+    vol_col = _find_col(res, "Valor_Total_Registrado")
+    out = []
+    for _, r in res.head(60).iterrows():
+        out.append({
+            "Data": (r[date_col].strftime("%d/%m/%Y")
+                     if date_col and pd.notna(r.get(date_col)) else "—"),
+            "Tipo": r.get("Tipo", "—"),
+            "Emissor": str(r.get(emis_col, "—"))[:40] if emis_col else "—",
+            "Devedor": str(r.get(dev_col, "—"))[:40] if dev_col else "—",
+            "Líder": str(r.get(lider_col, "—"))[:30] if lider_col else "—",
+            "Volume": _fmt_bi(r.get(vol_col)) if vol_col else "—",
+        })
+    st.dataframe(pd.DataFrame(out), use_container_width=True, hide_index=True)
 
 
 def render_feed_comunicados():
@@ -1786,6 +2108,407 @@ def _filtrar_ipe_por_empresas(df, nomes_empresas, n_dias):
     work = work.rename(columns=ren)
 
     return work.sort_values("_data", ascending=False)
+
+
+# ================================================================
+# FERRAMENTAS — motores de cálculo e fontes (bloco 2)
+# ================================================================
+
+# ─────────────────────────────────────────
+# CONSOLIDADOR TXT/MD (formato pipeline FIIs)
+# ─────────────────────────────────────────
+def _consolidar_textos(itens):
+    """itens = lista de (nome_arquivo, conteudo_str).
+    Gera um único texto no formato do pipeline FIIs (separadores #*80).
+    Tenta inferir TICKER e período do nome do arquivo (TICKER_PERIODO.ext)."""
+    sep = "#" * 80
+    out = []
+    out.append(f"CONSOLIDADO DE CARTAS — gerado em "
+               f"{_brt_date().strftime('%d/%m/%Y')}")
+    out.append(f"Total de cartas: {len(itens)}")
+    out.append(sep + "\n")
+    for nome, conteudo in itens:
+        base = re.sub(r"\.(txt|md|pdf)$", "", nome, flags=re.IGNORECASE)
+        partes = base.split("_")
+        if len(partes) >= 2:
+            ticker, periodo = partes[0], partes[1]
+        else:
+            ticker, periodo = base, "?"
+        out.append(sep)
+        out.append(f"# FUNDO: {ticker} | {periodo}")
+        out.append(sep + "\n")
+        out.append(conteudo)
+        out.append(f"\n{sep}")
+        out.append(f"# FIM: {ticker} | {periodo}")
+        out.append(sep + "\n")
+    return "\n".join(out)
+
+
+# ─────────────────────────────────────────
+# CALCULADORA DE BOND / DEBÊNTURE
+# ─────────────────────────────────────────
+def _gerar_cronograma(principal, taxa_aa, emissao, vencimento,
+                      sistema, periodicidade_meses, carencia_amort_meses):
+    """Gera cronograma de pagamentos.
+    sistema: 'BULLET' | 'SAC' | 'PRICE'
+    Retorna lista de dicts: {data, du, t_anos, juros, amort, saldo_pos, fluxo}.
+    taxa_aa em % (base 252 du/ano)."""
+    y = taxa_aa / 100.0
+    # datas de pagamento (de periodicidade em periodicidade, até o vencimento)
+    datas = []
+    d = emissao
+    while True:
+        # avança 'periodicidade_meses'
+        mo = d.month - 1 + periodicidade_meses
+        ano = d.year + mo // 12
+        mo = mo % 12 + 1
+        dia = min(d.day, 28)
+        try:
+            d = date(ano, mo, dia)
+        except ValueError:
+            d = date(ano, mo, 28)
+        if d >= vencimento:
+            break
+        datas.append(d)
+    datas.append(vencimento)
+    datas = sorted(set(datas))
+
+    n = len(datas)
+    # quais parcelas amortizam (após carência)
+    primeira_amort_idx = 0
+    if carencia_amort_meses > 0:
+        limite = emissao
+        mo = limite.month - 1 + carencia_amort_meses
+        ano = limite.year + mo // 12
+        mo = mo % 12 + 1
+        try:
+            limite = date(ano, mo, min(limite.day, 28))
+        except ValueError:
+            limite = date(ano, mo, 28)
+        primeira_amort_idx = sum(1 for dd in datas if dd <= limite)
+    n_amort = max(1, n - primeira_amort_idx)
+
+    # taxa por período (efetiva) — converte a.a. (252) para o período em du
+    cron = []
+    saldo = float(principal)
+    prev = emissao
+    # PRICE precisa da parcela constante; calcula taxa por período média
+    if sistema == "PRICE":
+        # usa taxa por período baseada na fração de ano média entre pagamentos
+        # taxa efetiva do período i: (1+y)^(t_i - t_{i-1}) - 1, aproximada constante
+        dus = []
+        p0 = emissao
+        for dd in datas:
+            du = int(np.busday_count(p0, dd, busdaycal=_BUSDAYCAL))
+            dus.append(du)
+            p0 = dd
+        # taxa periódica média
+        tot_du = int(np.busday_count(emissao, vencimento, busdaycal=_BUSDAYCAL))
+        ip = (1 + y) ** ((tot_du / 252) / n) - 1 if n else 0.0
+        # parcela Price sobre as parcelas que amortizam
+        if ip > 0 and n_amort > 0:
+            pmt = principal * (ip * (1 + ip) ** n_amort) / ((1 + ip) ** n_amort - 1)
+        else:
+            pmt = principal / max(1, n_amort)
+
+    for i, dd in enumerate(datas):
+        du = int(np.busday_count(prev, dd, busdaycal=_BUSDAYCAL))
+        t  = du / 252.0
+        juros = saldo * ((1 + y) ** t - 1)
+        amort = 0.0
+        if i >= primeira_amort_idx:
+            if sistema == "BULLET":
+                amort = saldo if dd == vencimento else 0.0
+            elif sistema == "SAC":
+                amort = principal / n_amort
+            elif sistema == "PRICE":
+                amort = max(0.0, pmt - juros)
+            amort = min(amort, saldo)
+        if dd == vencimento:
+            amort = saldo  # garante quitação
+        saldo_pos = max(0.0, saldo - amort)
+        cron.append({
+            "data": dd, "du": int(np.busday_count(emissao, dd, busdaycal=_BUSDAYCAL)),
+            "t_anos": int(np.busday_count(emissao, dd, busdaycal=_BUSDAYCAL)) / 252.0,
+            "juros": juros, "amort": amort, "fluxo": juros + amort,
+            "saldo_pos": saldo_pos,
+        })
+        saldo = saldo_pos
+        prev = dd
+    return cron
+
+
+def _metricas_cronograma(principal, cron, taxa_aa):
+    """Calcula duration de Macaulay e duration modificada do cronograma."""
+    y = taxa_aa / 100.0
+    pv = 0.0
+    pv_t = 0.0
+    for c in cron:
+        t = c["t_anos"]
+        cf = c["fluxo"]
+        disc = (1 + y) ** t
+        pv_i = cf / disc
+        pv += pv_i
+        pv_t += t * pv_i
+    mac = (pv_t / pv) if pv > 0 else None
+    mod = (mac / (1 + y)) if mac is not None else None
+    return {"pv": pv, "macaulay": mac, "modificada": mod}
+
+
+# ─────────────────────────────────────────
+# CASH SWEEP (opcional) — fluxo de recebíveis amortiza o saldo
+# ─────────────────────────────────────────
+def _aplicar_cash_sweep(principal, taxa_aa, emissao, datas_pgto,
+                        recebiveis_por_periodo, sweep_pct=100.0):
+    """Modelo simplificado de cash sweep para CRI/CRA pulverizado.
+    A cada data de pagamento entra um valor de recebível; paga-se primeiro os
+    juros do período, e sweep_pct do excedente amortiza o principal.
+    recebiveis_por_periodo: lista de floats (mesmo tamanho de datas_pgto) ou
+    um único float aplicado a todos os períodos.
+    Retorna (cron, quita_em, shortfall_total)."""
+    y = taxa_aa / 100.0
+    n = len(datas_pgto)
+    if isinstance(recebiveis_por_periodo, (int, float)):
+        recs = [float(recebiveis_por_periodo)] * n
+    else:
+        recs = list(recebiveis_por_periodo) + [0.0] * (n - len(recebiveis_por_periodo))
+    saldo = float(principal)
+    prev = emissao
+    cron = []
+    quita_em = None
+    shortfall_total = 0.0
+    for i, dd in enumerate(datas_pgto):
+        du = int(np.busday_count(prev, dd, busdaycal=_BUSDAYCAL))
+        t = du / 252.0
+        juros = saldo * ((1 + y) ** t - 1)
+        caixa = recs[i]
+        juros_pago = min(juros, caixa)
+        shortfall_juros = max(0.0, juros - caixa)
+        shortfall_total += shortfall_juros
+        # juros não pagos capitalizam no saldo
+        saldo += (juros - juros_pago)
+        excedente = max(0.0, caixa - juros)
+        amort = min(saldo, excedente * sweep_pct / 100.0)
+        saldo_pos = max(0.0, saldo - amort)
+        cron.append({
+            "data": dd, "recebivel": caixa, "juros": juros,
+            "juros_pago": juros_pago, "shortfall": shortfall_juros,
+            "amort": amort, "saldo_pos": saldo_pos,
+        })
+        if saldo_pos <= 0.01 and quita_em is None:
+            quita_em = dd
+        saldo = saldo_pos
+        prev = dd
+    return cron, quita_em, shortfall_total
+
+
+# ─────────────────────────────────────────
+# CONVERSOR DE TAXAS
+# ─────────────────────────────────────────
+def _aa_para_am(taxa_aa, base=252):
+    """% a.a. -> % a.m. equivalente (base 252 du: usa 21 du/mês)."""
+    y = taxa_aa / 100.0
+    if base == 252:
+        return ((1 + y) ** (21 / 252) - 1) * 100
+    return ((1 + y) ** (1 / 12) - 1) * 100
+
+
+def _am_para_aa(taxa_am, base=252):
+    y = taxa_am / 100.0
+    if base == 252:
+        return ((1 + y) ** (252 / 21) - 1) * 100
+    return ((1 + y) ** 12 - 1) * 100
+
+
+def _cdi_pct_para_spread(cdi_aa, pct_cdi):
+    """% do CDI -> taxa absoluta a.a. (ex.: 110% de CDI 10,5% = 11,55%)."""
+    return cdi_aa * pct_cdi / 100.0
+
+
+def _spread_para_cdi_pct(cdi_aa, taxa_aa):
+    """taxa absoluta a.a. -> % do CDI."""
+    return (taxa_aa / cdi_aa * 100.0) if cdi_aa else None
+
+
+def _cdi_mais_para_pct(cdi_aa, spread_aa):
+    """CDI+spread (composto) -> % do CDI equivalente.
+    taxa absoluta = (1+cdi)*(1+spread)-1 ; %CDI = absoluta / cdi * 100."""
+    if not cdi_aa:
+        return None
+    bruto = (1 + cdi_aa / 100.0) * (1 + spread_aa / 100.0) - 1  # fração absoluta
+    bruto_pct = bruto * 100.0                                    # em % a.a.
+    return bruto_pct / cdi_aa * 100.0                            # em % do CDI
+
+
+def _converter_cdi_ipca(modo, taxa_in, cdi_aa, ipca_proj_aa):
+    """Converte entre CDI+ e IPCA+ mantendo a taxa nominal total equivalente.
+    modo='cdi_para_ipca': taxa_in = spread sobre CDI -> retorna spread real sobre IPCA.
+    modo='ipca_para_cdi': taxa_in = spread real sobre IPCA -> retorna spread sobre CDI.
+    Premissa: taxa nominal = (1+cdi)*(1+spread_cdi) e = (1+ipca)*(1+spread_ipca)."""
+    c = cdi_aa / 100.0
+    p = ipca_proj_aa / 100.0
+    s = taxa_in / 100.0
+    if modo == "cdi_para_ipca":
+        nominal = (1 + c) * (1 + s)             # CDI+ -> nominal
+        spread_ipca = nominal / (1 + p) - 1     # desconta IPCA
+        return spread_ipca * 100.0
+    else:
+        nominal = (1 + p) * (1 + s)             # IPCA+ -> nominal
+        spread_cdi = nominal / (1 + c) - 1      # desconta CDI
+        return spread_cdi * 100.0
+
+
+# ─────────────────────────────────────────
+# CARTAS DE FII — download do site (relatoriosfiis.com.br)
+# ─────────────────────────────────────────
+# Lista de tickers ativos (extraída de fundos.csv — coluna ativo=sim).
+# Edite à vontade: adicionar/remover um ticker é só mexer nesta lista.
+FII_TICKERS = [
+    "PMIS11", "RBRY11", "AFHI11", "FLCR11", "VCJR11", "RPRI11",
+    "HGCR11", "KIVO11", "RZLC11", "MAGM11", "KNUQ11", "KNSC11",
+    "KNIP11", "KNHY11", "KNCR11", "KFEN11", "TRXY11", "RECD11",
+    "VCRI11", "RECR11", "RMBS11", "RECM11", "VOTS11", "HSAF11",
+    "FYTO11", "ARRI11", "AIEC11", "BTHF11", "CLIN11", "BTCI11",
+    "MCRE11", "CCME11", "MCCI11", "SNEL11", "EQIR11", "LIFE11",
+    "VVCR11", "RBRR11", "VRTA11", "RBHG11", "MXRF11", "GAME11",
+    "HABT11", "RBRX11", "ALZC11", "GCRI11", "PCIP11", "PSEC11",
+    "RBHY11", "ZAVC11", "CPTS11", "RZAK11", "VGHF11", "KNRE11",
+    "ARXD11", "XPCI11", "VRTM11", "VGIP11", "VGIR11", "SPXS11",
+    "AFHF11", "HREC11", "JSCR11", "IMMB11", "SNME11", "EXES11",
+    "RINV11", "RCRI11", "SNCI11", "TELM11", "WHGR11", "JSAF11",
+    "PORD11", "MANA11", "CYCR11", "ITRI11", "ICRI11", "BCRI11",
+    "TMPS11", "CACR11", "SAPI11", "JPPA11", "OUJP11", "SMRE11",
+    "RBVA11", "IRIM11", "KNHF11",
+]
+
+_RELFIIS_BASE = "https://relatoriosfiis.com.br"
+_FNET_DOWN = "https://fnet.bmfbovespa.com.br/fnet/publico/downloadDocumento?id="
+_RELFIIS_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"),
+    "Accept": "*/*",
+    "hx-request": "true",
+    "hx-target": "table-container",
+    "Referer": "https://relatoriosfiis.com.br/",
+}
+
+
+def _relfiis_mais_recente(ticker):
+    """Busca a carta mais recente de um ticker. Retorna (data_ref, url_download, err)."""
+    if not HAS_BS4:
+        return None, None, "beautifulsoup4 ausente"
+    try:
+        r = requests.get(f"{_RELFIIS_BASE}/?q={ticker}",
+                         headers=_RELFIIS_HEADERS, timeout=20)
+        r.raise_for_status()
+    except Exception as e:
+        return None, None, str(e)
+    soup = _BS(r.text, "html.parser")
+    tbody = soup.find("tbody")
+    if not tbody:
+        return None, None, "tabela não encontrada"
+    linhas = tbody.find_all("tr")
+    if not linhas:
+        return None, None, "sem cartas"
+    cols = linhas[0].find_all("td")
+    if len(cols) < 4:
+        return None, None, "formato inesperado"
+    data_ref = cols[2].get_text(strip=True)
+    url_dl = None
+    for link in cols[3].find_all("a"):
+        href = link.get("href", "")
+        if "downloadDocumento" not in href:
+            continue
+        if href.startswith("http"):
+            url_dl = href                       # já absoluto (FNET ou outro)
+        elif "id=" in href:
+            # relativo contendo id → monta URL do FNET
+            _id = href.split("id=")[-1].split("&")[0]
+            url_dl = _FNET_DOWN + _id
+        else:
+            url_dl = _RELFIIS_BASE + (href if href.startswith("/") else "/" + href)
+        break
+    return data_ref, url_dl, None
+
+
+def _relfiis_baixar_pdf(url_download):
+    """Baixa o PDF (bytes) validando o cabeçalho %PDF-. Retorna (bytes, err)."""
+    try:
+        s = requests.Session()
+        s.headers.update({"User-Agent": _RELFIIS_HEADERS["User-Agent"],
+                          "Accept": "application/pdf,*/*"})
+        r = s.get(url_download, timeout=180)
+        r.raise_for_status()
+        if not r.content.startswith(b"%PDF-"):
+            return None, "resposta não é PDF"
+        return r.content, None
+    except Exception as e:
+        return None, str(e)
+
+
+# ── Controle de "lidas" persistido no GitHub (JSON) ──────────────
+_CARTAS_LIDAS_PATH = "cartas_lidas.json"
+
+
+def _gh_get_json(path):
+    """Lê um JSON do repo GitHub (usa as mesmas credenciais do backup do .db)."""
+    cfg = _gh_cfg()
+    if not cfg:
+        return None, "sem credenciais github"
+    import base64
+    url = f"https://api.github.com/repos/{cfg['repo']}/contents/{path}"
+    try:
+        r = requests.get(url, params={"ref": cfg["branch"]},
+                         headers=_gh_headers(cfg["token"]), timeout=30)
+        if r.status_code == 404:
+            return {}, None  # ainda não existe
+        r.raise_for_status()
+        data = base64.b64decode(r.json().get("content", ""))
+        return json.loads(data.decode("utf-8")), None
+    except Exception as e:
+        return None, str(e)
+
+
+def _gh_put_json(path, obj, msg):
+    """Grava/atualiza um JSON no repo GitHub."""
+    cfg = _gh_cfg()
+    if not cfg:
+        return False, "sem credenciais github"
+    import base64
+    url = f"https://api.github.com/repos/{cfg['repo']}/contents/{path}"
+    h = _gh_headers(cfg["token"])
+    try:
+        sha = None
+        g = requests.get(url, params={"ref": cfg["branch"]}, headers=h, timeout=30)
+        if g.status_code == 200:
+            sha = g.json().get("sha")
+        content = base64.b64encode(
+            json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")).decode()
+        payload = {"message": msg, "content": content, "branch": cfg["branch"]}
+        if sha:
+            payload["sha"] = sha
+        p = requests.put(url, headers=h, json=payload, timeout=60)
+        p.raise_for_status()
+        return True, "ok"
+    except Exception as e:
+        return False, str(e)
+
+
+def _carregar_lidas():
+    """Retorna set de chaves '{ticker}|{data_ref}' já lidas."""
+    obj, _err = _gh_get_json(_CARTAS_LIDAS_PATH)
+    if obj is None:
+        # fallback local (sessão) se github indisponível
+        return set(st.session_state.get("cartas_lidas_local", []))
+    return set(obj.get("lidas", []))
+
+
+def _salvar_lidas(chaves):
+    ok, _ = _gh_put_json(_CARTAS_LIDAS_PATH, {"lidas": sorted(chaves)},
+                         f"cartas lidas {_brt_today()}")
+    if not ok:
+        st.session_state["cartas_lidas_local"] = sorted(chaves)
+    return ok
 
 
 def render_curva_di(di):
