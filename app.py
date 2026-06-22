@@ -1845,46 +1845,56 @@ def _ferr_cartas_fii():
         novas_chaves = []
         itens = []
         log = []  # (ticker, status, detalhe) — status: ok | lida | falha
+        erro_fatal = None
         prog = st.progress(0.0, text="Iniciando…")
-        for i, tk in enumerate(FII_TICKERS):
-            prog.progress((i + 1) / len(FII_TICKERS), text=f"{tk}…")
-            data_ref, url, err = _relfiis_mais_recente(tk)
-            if err or not data_ref:
-                log.append((tk, "falha", f"busca: {err or 'sem data'}"))
-                continue
-            if not url:
-                log.append((tk, "falha", f"{data_ref}: link de download não encontrado"))
-                continue
-            chave = f"{tk}|{data_ref}"
-            if chave in lidas:
-                log.append((tk, "lida", data_ref))
-                continue
-            pdf_bytes, errd = _relfiis_baixar_pdf(url)
-            if errd or not pdf_bytes:
-                log.append((tk, "falha", f"{data_ref}: download — {errd or 'vazio'}"))
-                continue
-            periodo = data_ref.replace("/", "")
-            nome = f"{tk}_{periodo}.pdf"
-            if not (HAS_FITZ and HAS_PDFPLUMBER):
-                log.append((tk, "falha", "extração indisponível (libs ausentes)"))
-                continue
-            try:
-                _txt, _md, _info = _converter_pdf(pdf_bytes, nome, usar_ocr=True)
-                itens.append((f"{tk}_{periodo}.md", _txt))
-                novas_chaves.append(chave)
-                extra = f"{_info['paginas']} pág."
-                if _info.get("usou_ocr"):
-                    extra += " · OCR"
-                log.append((tk, "ok", f"{data_ref} · {extra}"))
-            except Exception as e:
-                log.append((tk, "falha", f"{data_ref}: extração — {e}"))
-        prog.empty()
+        try:
+            for i, tk in enumerate(FII_TICKERS):
+                prog.progress((i + 1) / len(FII_TICKERS), text=f"{tk} ({i+1}/{len(FII_TICKERS)})…")
+                try:
+                    data_ref, url, err = _relfiis_mais_recente(tk)
+                    if err or not data_ref:
+                        log.append((tk, "falha", f"busca: {err or 'sem data'}"))
+                        continue
+                    if not url:
+                        log.append((tk, "falha", f"{data_ref}: link de download não encontrado"))
+                        continue
+                    chave = f"{tk}|{data_ref}"
+                    if chave in lidas:
+                        log.append((tk, "lida", data_ref))
+                        continue
+                    pdf_bytes, errd = _relfiis_baixar_pdf(url)
+                    if errd or not pdf_bytes:
+                        log.append((tk, "falha", f"{data_ref}: download — {errd or 'vazio'}"))
+                        continue
+                    periodo = data_ref.replace("/", "")
+                    nome = f"{tk}_{periodo}.pdf"
+                    if not (HAS_FITZ and HAS_PDFPLUMBER):
+                        log.append((tk, "falha", "extração indisponível (libs ausentes)"))
+                        continue
+                    _txt, _md, _info = _converter_pdf(pdf_bytes, nome, usar_ocr=True)
+                    itens.append((f"{tk}_{periodo}.md", _txt))
+                    novas_chaves.append(chave)
+                    extra = f"{_info['paginas']} pág."
+                    if _info.get("usou_ocr"):
+                        extra += " · OCR"
+                    log.append((tk, "ok", f"{data_ref} · {extra}"))
+                except Exception as e:
+                    # erro num fundo não derruba os demais
+                    log.append((tk, "falha", f"erro inesperado — {e}"))
+                    continue
+        except Exception as e:
+            erro_fatal = str(e)
+        finally:
+            prog.empty()
 
         # Persiste 'lidas' imediatamente (independe do render do consolidado)
         salvou = None
         if novas_chaves:
-            todas = set(lidas) | set(novas_chaves)
-            salvou = _salvar_lidas(todas)
+            try:
+                todas = set(lidas) | set(novas_chaves)
+                salvou = _salvar_lidas(todas)
+            except Exception as e:
+                erro_fatal = (erro_fatal or "") + f" | salvar lidas: {e}"
 
         consolidado = _consolidar_textos(itens) if itens else None
         # Guarda TUDO no session_state para sobreviver ao rerun do download_button
@@ -1894,7 +1904,9 @@ def _ferr_cartas_fii():
             "n_ok": len(itens),
             "n_lida": sum(1 for _, s, _ in log if s == "lida"),
             "n_falha": sum(1 for _, s, _ in log if s == "falha"),
+            "n_total": len(FII_TICKERS),
             "salvou_lidas": salvou,
+            "erro_fatal": erro_fatal,
             "nome_out": f"cartas_fii_{_brt_date().strftime('%Y%m%d')}.md",
             "ts": datetime.now().strftime("%H:%M:%S"),
         }
@@ -1903,10 +1915,14 @@ def _ferr_cartas_fii():
     res = st.session_state.get("fii_resultado")
     if res:
         st.markdown("---")
+        if res.get("erro_fatal"):
+            st.error(f"Erro durante o processamento: {res['erro_fatal']}")
         # Resumo
+        processados = res["n_ok"] + res["n_lida"] + res["n_falha"]
         resumo = (f"✅ {res['n_ok']} nova(s) · "
                   f"⏭️ {res['n_lida']} já lida(s) · "
-                  f"⚠️ {res['n_falha']} falha(s)  ·  {res['ts']}")
+                  f"⚠️ {res['n_falha']} falha(s) · "
+                  f"{processados}/{res.get('n_total', '?')} processados  ·  {res['ts']}")
         if res["n_ok"] > 0:
             st.success(resumo)
         elif res["n_falha"] > 0 and res["n_ok"] == 0:
@@ -1929,21 +1945,25 @@ def _ferr_cartas_fii():
             st.text_area("Copiar para colar no Claude", res["consolidado"],
                          height=240, key="fii_consol_txt")
 
-        # Log detalhado por fundo
-        with st.expander(f"📋 Log de execução ({len(res['log'])} fundos)", expanded=True):
-            log_html = ""
-            for tk, status, detalhe in res["log"]:
-                if status == "ok":
-                    ic, cor = "✅", "var(--green)"
-                elif status == "lida":
-                    ic, cor = "⏭️", "var(--text3)"
-                else:
-                    ic, cor = "⚠️", "var(--red)"
-                log_html += (f'<div style="font-family:\'JetBrains Mono\',monospace;'
-                             f'font-size:11.5px;padding:1px 0">'
-                             f'{ic} <b>{tk}</b> '
-                             f'<span style="color:{cor}">{detalhe}</span></div>')
-            st.markdown(log_html, unsafe_allow_html=True)
+        # Log detalhado por fundo — sempre renderiza
+        n_log = len(res["log"])
+        with st.expander(f"📋 Log de execução ({n_log} fundos processados)", expanded=True):
+            if n_log == 0:
+                st.caption("Nenhum fundo processado — verifique a lista FII_TICKERS ou a conexão.")
+            else:
+                log_html = ""
+                for tk, status, detalhe in res["log"]:
+                    if status == "ok":
+                        ic, cor = "✅", "var(--green)"
+                    elif status == "lida":
+                        ic, cor = "⏭️", "var(--text3)"
+                    else:
+                        ic, cor = "⚠️", "var(--red)"
+                    log_html += (f'<div style="font-family:\'JetBrains Mono\',monospace;'
+                                 f'font-size:11.5px;padding:1px 0">'
+                                 f'{ic} <b>{tk}</b> '
+                                 f'<span style="color:{cor}">{detalhe}</span></div>')
+                st.markdown(log_html, unsafe_allow_html=True)
 
 
 # ── 6) Busca em ofertas CVM ────────────────────────────────────
