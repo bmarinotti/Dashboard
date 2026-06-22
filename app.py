@@ -1794,36 +1794,33 @@ def _ferr_cartas_fii():
                 "para esta sessão (zera ao recarregar).")
 
     # Quantos por lote (evita estouro de memória/tempo no Streamlit Cloud)
-    LOTE = 8
+    LOTE = 30
 
     buffer_atual = _buffer_listar()
     n_buffer = len(buffer_atual)
 
-    c1, c2, c3, c4 = st.columns([1.1, 1.5, 1.1, 0.9])
+    c1, c2, c3 = st.columns([1.2, 1.6, 0.9])
     with c1:
         if st.button("🔍 Verificar novas", key="fii_check", use_container_width=True):
             st.session_state["fii_check_run"] = True
     with c2:
-        lbl = f"⬇️ Baixar lote ({LOTE} fundos)"
+        lbl = f"⬇️ Baixar lote (até {LOTE} fundos)"
         if st.button(lbl, key="fii_dl", type="primary", use_container_width=True):
             st.session_state["fii_dl_run"] = True
     with c3:
-        if st.button(f"📦 Consolidar ({n_buffer})", key="fii_consol",
-                     use_container_width=True, disabled=(n_buffer == 0),
-                     help="Gera o .md com tudo que já está no buffer (inclusive de execuções anteriores)."):
-            st.session_state["fii_consol_run"] = True
-    with c4:
         if st.button("↺ Limpar", key="fii_clear", use_container_width=True,
                      help="Limpa o buffer de cartas baixadas e o log desta tela."):
             _buffer_limpar()
-            for k in ("fii_check_run", "fii_dl_run", "fii_consol_run",
-                      "fii_resultado", "fii_check_res", "fii_consolidado"):
+            for k in ("fii_check_run", "fii_dl_run", "fii_cursor",
+                      "fii_resultado", "fii_check_res"):
                 st.session_state.pop(k, None)
             st.rerun()
 
     if n_buffer:
-        st.caption(f"📦 Buffer: {n_buffer} carta(s) já baixada(s) e salva(s) "
-                   f"(sobrevivem a reinício do app). Clique em Consolidar quando terminar.")
+        st.caption(f"📦 Buffer: {n_buffer} carta(s) baixada(s) e salva(s) "
+                   "(sobrevivem a reinício do app). O consolidado abaixo se atualiza sozinho. "
+                   "Se o app travar no meio de um lote, basta clicar em Baixar lote de novo — "
+                   "ele retoma de onde parou, sem rebaixar o que já está no buffer.")
 
     # ── Verificação: lista o mais recente por fundo e marca o que é novo ──
     if st.session_state.get("fii_check_run"):
@@ -1962,7 +1959,7 @@ def _ferr_cartas_fii():
             st.info(msg + f"  —  faltam {res['restantes']} fundos. "
                     "Clique em Baixar lote de novo para continuar.")
         else:
-            st.success(msg + "  —  todos os fundos percorridos. Clique em Consolidar.")
+            st.success(msg + "  —  todos os fundos percorridos. O consolidado está pronto abaixo.")
         with st.expander(f"📋 Log do lote ({len(res['lote'])} fundos)", expanded=True):
             html = ""
             for tk, status, det in res["lote"]:
@@ -1980,27 +1977,20 @@ def _ferr_cartas_fii():
             st.markdown(html or "—", unsafe_allow_html=True)
 
     # ── Consolidação a partir do BUFFER (resistente a crash) ──
-    if st.session_state.get("fii_consol_run"):
-        st.session_state["fii_consol_run"] = False
-        buf = _buffer_listar()
-        if not buf:
-            st.session_state["fii_consolidado"] = None
-        else:
-            itens = [(f"{c['ticker']}_{c['periodo']}.md", c["conteudo"]) for c in buf]
-            st.session_state["fii_consolidado"] = {
-                "texto": _consolidar_textos(itens),
-                "n": len(itens),
-                "nome": f"cartas_fii_{_brt_date().strftime('%Y%m%d')}.md",
-            }
-
-    cons = st.session_state.get("fii_consolidado")
-    if cons:
+    # ── Consolidado sempre disponível, gerado a partir do BUFFER ──
+    # (o buffer é alimentado carta a carta; aqui só montamos o texto final)
+    buf_final = _buffer_listar()
+    if buf_final:
+        itens = [(f"{c['ticker']}_{c['periodo']}.md", c["conteudo"]) for c in buf_final]
+        texto = _consolidar_textos(itens)
+        nome = f"cartas_fii_{_brt_date().strftime('%Y%m%d')}.md"
         st.markdown("---")
-        st.success(f"Consolidado gerado com {cons['n']} carta(s) do buffer.")
-        st.download_button("⬇️ Baixar consolidado (.md)", cons["texto"].encode("utf-8"),
-                           file_name=cons["nome"], mime="text/markdown",
+        st.success(f"Consolidado pronto com {len(itens)} carta(s) do buffer "
+                   "(atualiza automaticamente a cada lote).")
+        st.download_button("⬇️ Baixar consolidado (.md)", texto.encode("utf-8"),
+                           file_name=nome, mime="text/markdown",
                            key="fii_consol_dl", use_container_width=True)
-        st.text_area("Copiar para colar no Claude", cons["texto"], height=240,
+        st.text_area("Copiar para colar no Claude", texto, height=240,
                      key="fii_consol_txt")
 
 
