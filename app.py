@@ -6065,13 +6065,15 @@ def render_briefing_credito(anbima_df):
         dev_col  = _find_col(df_sre, "Identificacao_devedores_coobrigados")
         vol_col  = _find_col(df_sre, "Valor_Total_Registrado")
 
-        # D-1 até D0
-        _d0 = pd.Timestamp(_brt_date())
-        _d1 = _d0 - pd.Timedelta(days=1)
+        # D-1 (1 dia útil antes) até D0, respeitando feriados (calendário ANBIMA)
+        _hoje = _brt_date()
+        _d0_dt = _hoje if is_bday(_hoje) else _target_date_n_du_back(_hoje + timedelta(days=1), 1)
+        _d1_dt = _target_date_n_du_back(_d0_dt, 1)
+        _d0 = pd.Timestamp(_d0_dt).normalize()
+        _d1 = pd.Timestamp(_d1_dt).normalize()
         if date_col:
-            novas = df_sre[
-                (df_sre[date_col] >= _d1) & (df_sre[date_col] <= _d0)
-            ].copy()
+            _col_dt = pd.to_datetime(df_sre[date_col], errors="coerce").dt.normalize()
+            novas = df_sre[(_col_dt >= _d1) & (_col_dt <= _d0)].copy()
         else:
             novas = df_sre.head(10).copy()
         data_txt = f"{_d1.strftime('%d/%m')}–{_d0.strftime('%d/%m')}"
