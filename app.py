@@ -1784,99 +1784,166 @@ def _ferr_cartas_fii():
         st.info("Sem credenciais GitHub em st.secrets — o controle de 'lidas' valerá só "
                 "para esta sessão (zera ao recarregar).")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns([1.2, 1.4, 0.8])
     with col1:
-        if st.button("🔍 Verificar cartas novas da semana", key="fii_check",
-                     use_container_width=True):
+        if st.button("🔍 Verificar novas", key="fii_check", use_container_width=True):
             st.session_state["fii_check_run"] = True
     with col2:
-        if st.button("⬇️ Baixar não lidas → consolidar .md", key="fii_dl",
+        if st.button("⬇️ Baixar não lidas → consolidar", key="fii_dl",
                      type="primary", use_container_width=True):
             st.session_state["fii_dl_run"] = True
+    with col3:
+        if st.button("↺ Limpar", key="fii_clear", use_container_width=True,
+                     help="Limpa o resultado e o log desta tela (não apaga as 'lidas')."):
+            for k in ("fii_check_run", "fii_dl_run", "fii_resultado", "fii_check_res"):
+                st.session_state.pop(k, None)
+            st.rerun()
 
-    # Verificação: lista o mais recente por fundo e marca o que é novo
+    # ── Verificação: lista o mais recente por fundo e marca o que é novo ──
     if st.session_state.get("fii_check_run"):
+        st.session_state["fii_check_run"] = False
         lidas = _carregar_lidas()
-        linhas = ""
-        novas = 0
         prog_v = st.progress(0.0, text="Consultando o site…")
+        rows = []
+        novas = 0
         for i, tk in enumerate(FII_TICKERS):
             prog_v.progress((i + 1) / len(FII_TICKERS), text=f"{tk}…")
             data_ref, url, err = _relfiis_mais_recente(tk)
             if err or not data_ref:
-                linhas += (f'<div class="briefing-row"><span class="nm">{tk} '
-                           f'<span style="color:var(--text3)">— {err or "sem dados"}</span>'
-                           f'</span></div>')
+                rows.append((tk, None, None, err or "sem dados"))
                 continue
             chave = f"{tk}|{data_ref}"
             is_nova = chave not in lidas
             if is_nova:
                 novas += 1
+            rows.append((tk, data_ref, is_nova, None))
+        prog_v.empty()
+        st.session_state["fii_check_res"] = {"rows": rows, "novas": novas}
+
+    # Render do resultado da verificação (persiste entre reruns)
+    if st.session_state.get("fii_check_res"):
+        cr = st.session_state["fii_check_res"]
+        st.markdown(f"**{cr['novas']} carta(s) nova(s)** de {len(FII_TICKERS)} fundos")
+        linhas = ""
+        for tk, data_ref, is_nova, err in cr["rows"]:
+            if err:
+                linhas += (f'<div class="briefing-row"><span class="nm">{tk} '
+                           f'<span style="color:var(--red);font-size:11px">⚠ {err}</span>'
+                           f'</span></div>')
+                continue
             badge = ('<span class="cr-chip up">NOVA</span>' if is_nova
                      else '<span style="color:var(--text3);font-size:11px">lida</span>')
             linhas += (f'<div class="briefing-row"><span class="nm">{tk} '
                        f'<span style="color:var(--text3)">{data_ref}</span> {badge}'
                        f'</span></div>')
-        prog_v.empty()
-        st.markdown(f"**{novas} carta(s) nova(s)** de {len(FII_TICKERS)} fundos")
         st.markdown(linhas, unsafe_allow_html=True)
 
-    # Download + extração + consolidação
+    # ── Download + extração + consolidação ──
     if st.session_state.get("fii_dl_run"):
         st.session_state["fii_dl_run"] = False
         lidas = _carregar_lidas()
         novas_chaves = []
         itens = []
+        log = []  # (ticker, status, detalhe) — status: ok | lida | falha
         prog = st.progress(0.0, text="Iniciando…")
-        falhas = []
         for i, tk in enumerate(FII_TICKERS):
             prog.progress((i + 1) / len(FII_TICKERS), text=f"{tk}…")
             data_ref, url, err = _relfiis_mais_recente(tk)
-            if err or not url or not data_ref:
-                falhas.append(f"{tk}: {err or 'sem link'}")
+            if err or not data_ref:
+                log.append((tk, "falha", f"busca: {err or 'sem data'}"))
+                continue
+            if not url:
+                log.append((tk, "falha", f"{data_ref}: link de download não encontrado"))
                 continue
             chave = f"{tk}|{data_ref}"
             if chave in lidas:
-                continue  # já lida
+                log.append((tk, "lida", data_ref))
+                continue
             pdf_bytes, errd = _relfiis_baixar_pdf(url)
             if errd or not pdf_bytes:
-                falhas.append(f"{tk}: {errd or 'download falhou'}")
+                log.append((tk, "falha", f"{data_ref}: download — {errd or 'vazio'}"))
                 continue
             periodo = data_ref.replace("/", "")
             nome = f"{tk}_{periodo}.pdf"
-            if HAS_FITZ and HAS_PDFPLUMBER:
-                try:
-                    _txt, _md, _info = _converter_pdf(pdf_bytes, nome, usar_ocr=True)
-                    itens.append((f"{tk}_{periodo}.md", _txt))  # usa txt limpo p/ consolidado
-                    novas_chaves.append(chave)
-                except Exception as e:
-                    falhas.append(f"{tk}: extração — {e}")
-            else:
-                falhas.append(f"{tk}: extração indisponível")
+            if not (HAS_FITZ and HAS_PDFPLUMBER):
+                log.append((tk, "falha", "extração indisponível (libs ausentes)"))
+                continue
+            try:
+                _txt, _md, _info = _converter_pdf(pdf_bytes, nome, usar_ocr=True)
+                itens.append((f"{tk}_{periodo}.md", _txt))
+                novas_chaves.append(chave)
+                extra = f"{_info['paginas']} pág."
+                if _info.get("usou_ocr"):
+                    extra += " · OCR"
+                log.append((tk, "ok", f"{data_ref} · {extra}"))
+            except Exception as e:
+                log.append((tk, "falha", f"{data_ref}: extração — {e}"))
         prog.empty()
 
-        if not itens:
-            st.info("Nenhuma carta nova para consolidar.")
-            if falhas:
-                with st.expander("Detalhes"):
-                    st.write(falhas)
-        else:
-            consolidado = _consolidar_textos(itens)
-            nome_out = f"cartas_fii_{_brt_date().strftime('%Y%m%d')}.md"
-            st.success(f"{len(itens)} carta(s) nova(s) consolidada(s).")
-            st.download_button("⬇️ Baixar consolidado (.md)", consolidado.encode("utf-8"),
-                               file_name=nome_out, mime="text/markdown",
-                               key="fii_consol_dl", use_container_width=True)
-            st.text_area("Copiar para colar no Claude", consolidado, height=240,
-                         key="fii_consol_txt")
-            # marca como lidas (persiste no GitHub se houver credenciais)
+        # Persiste 'lidas' imediatamente (independe do render do consolidado)
+        salvou = None
+        if novas_chaves:
             todas = set(lidas) | set(novas_chaves)
             salvou = _salvar_lidas(todas)
-            st.caption("Marcadas como lidas e persistidas no GitHub."
-                       if salvou else "Marcadas como lidas nesta sessão (sem GitHub).")
-            if falhas:
-                with st.expander(f"{len(falhas)} fundo(s) com problema"):
-                    st.write(falhas)
+
+        consolidado = _consolidar_textos(itens) if itens else None
+        # Guarda TUDO no session_state para sobreviver ao rerun do download_button
+        st.session_state["fii_resultado"] = {
+            "log": log,
+            "consolidado": consolidado,
+            "n_ok": len(itens),
+            "n_lida": sum(1 for _, s, _ in log if s == "lida"),
+            "n_falha": sum(1 for _, s, _ in log if s == "falha"),
+            "salvou_lidas": salvou,
+            "nome_out": f"cartas_fii_{_brt_date().strftime('%Y%m%d')}.md",
+            "ts": datetime.now().strftime("%H:%M:%S"),
+        }
+
+    # ── Render do resultado do download (persiste entre reruns) ──
+    res = st.session_state.get("fii_resultado")
+    if res:
+        st.markdown("---")
+        # Resumo
+        resumo = (f"✅ {res['n_ok']} nova(s) · "
+                  f"⏭️ {res['n_lida']} já lida(s) · "
+                  f"⚠️ {res['n_falha']} falha(s)  ·  {res['ts']}")
+        if res["n_ok"] > 0:
+            st.success(resumo)
+        elif res["n_falha"] > 0 and res["n_ok"] == 0:
+            st.warning(resumo + "  — nenhuma carta nova baixada.")
+        else:
+            st.info(resumo)
+
+        # Status da persistência das 'lidas'
+        if res["salvou_lidas"] is True:
+            st.caption("💾 Cartas novas marcadas como lidas e persistidas no GitHub.")
+        elif res["salvou_lidas"] is False:
+            st.caption("💾 Marcadas como lidas nesta sessão (GitHub indisponível — verifique secrets).")
+
+        # Consolidado: download + área para copiar
+        if res["consolidado"]:
+            st.download_button("⬇️ Baixar consolidado (.md)",
+                               res["consolidado"].encode("utf-8"),
+                               file_name=res["nome_out"], mime="text/markdown",
+                               key="fii_consol_dl", use_container_width=True)
+            st.text_area("Copiar para colar no Claude", res["consolidado"],
+                         height=240, key="fii_consol_txt")
+
+        # Log detalhado por fundo
+        with st.expander(f"📋 Log de execução ({len(res['log'])} fundos)", expanded=True):
+            log_html = ""
+            for tk, status, detalhe in res["log"]:
+                if status == "ok":
+                    ic, cor = "✅", "var(--green)"
+                elif status == "lida":
+                    ic, cor = "⏭️", "var(--text3)"
+                else:
+                    ic, cor = "⚠️", "var(--red)"
+                log_html += (f'<div style="font-family:\'JetBrains Mono\',monospace;'
+                             f'font-size:11.5px;padding:1px 0">'
+                             f'{ic} <b>{tk}</b> '
+                             f'<span style="color:{cor}">{detalhe}</span></div>')
+            st.markdown(log_html, unsafe_allow_html=True)
 
 
 # ── 6) Busca em ofertas CVM ────────────────────────────────────
@@ -2495,19 +2562,24 @@ def _gh_put_json(path, obj, msg):
 
 
 def _carregar_lidas():
-    """Retorna set de chaves '{ticker}|{data_ref}' já lidas."""
+    """Retorna set de chaves '{ticker}|{data_ref}' já lidas.
+    Une o que está no GitHub com a cópia de sessão (consistência dentro da sessão)."""
+    local = set(st.session_state.get("cartas_lidas_local", []))
     obj, _err = _gh_get_json(_CARTAS_LIDAS_PATH)
     if obj is None:
-        # fallback local (sessão) se github indisponível
-        return set(st.session_state.get("cartas_lidas_local", []))
-    return set(obj.get("lidas", []))
+        return local  # github indisponível → só sessão
+    remoto = set(obj.get("lidas", []))
+    return remoto | local
 
 
 def _salvar_lidas(chaves):
+    """Persiste no GitHub e SEMPRE atualiza a cópia de sessão.
+    Retorna True se persistiu no GitHub, False se ficou só na sessão."""
+    chaves = set(chaves)
+    # sessão sempre reflete o estado mais recente
+    st.session_state["cartas_lidas_local"] = sorted(chaves)
     ok, _ = _gh_put_json(_CARTAS_LIDAS_PATH, {"lidas": sorted(chaves)},
                          f"cartas lidas {_brt_today()}")
-    if not ok:
-        st.session_state["cartas_lidas_local"] = sorted(chaves)
     return ok
 
 
