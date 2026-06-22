@@ -2797,6 +2797,40 @@ def backup_db_to_github():
         return False, str(e)
 
 
+def _auto_backup_github(min_intervalo_seg=60, motivo="auto"):
+    """Backup automático com throttle. Só envia se passou min_intervalo_seg
+    desde o último backup automático (registrado em meta). Nunca propaga erro:
+    uma falha de rede aqui não pode quebrar o salvamento do dado.
+    Retorna (enviou: bool, msg: str)."""
+    try:
+        if not _gh_cfg():
+            return False, "sem credenciais github"
+        agora = int(_time.time())
+        ultimo = 0
+        try:
+            with _db() as con:
+                row = con.execute(
+                    "SELECT value FROM meta WHERE key='last_auto_backup'").fetchone()
+                if row and row[0]:
+                    ultimo = int(row[0])
+        except Exception:
+            ultimo = 0
+        if agora - ultimo < min_intervalo_seg:
+            return False, "throttle (backup recente)"
+        ok, msg = backup_db_to_github()
+        if ok:
+            try:
+                with _db() as con:
+                    con.execute(
+                        "INSERT OR REPLACE INTO meta(key,value) VALUES('last_auto_backup',?)",
+                        (str(agora),))
+            except Exception:
+                pass
+        return ok, msg
+    except Exception as e:
+        return False, str(e)
+
+
 def main():
     # Restaura o banco do GitHub no boot se o local sumiu (redeploy Streamlit Cloud).
     if "db_restored" not in st.session_state:
@@ -4380,6 +4414,8 @@ def save_run(rtype, run_date, rows):
                 " (brt_date, run_type, saved_at, ativo, emissor, tipo, vencimento,"
                 "  indexador, compra, venda, anbima, duration, rating, secao, spread_b)"
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", recs)
+        # Backup automático ao GitHub (throttled; silencioso se falhar)
+        _auto_backup_github(motivo=f"run {rtype} {run_date}")
         return len(recs)
     except Exception:
         return 0
