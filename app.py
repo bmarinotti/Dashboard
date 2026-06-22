@@ -470,6 +470,15 @@ def init_db():
             taxa     REAL,
             PRIMARY KEY (brt_date, session, label)
         );
+        CREATE TABLE IF NOT EXISTS cartas_buffer (
+            chave     TEXT PRIMARY KEY,   -- '{ticker}|{data_ref}'
+            ticker    TEXT NOT NULL,
+            data_ref  TEXT NOT NULL,
+            periodo   TEXT,               -- ex.: Mai2026
+            conteudo  TEXT,               -- texto extraído da carta
+            paginas   INTEGER,
+            saved_at  INTEGER NOT NULL
+        );
         """)
     # Migração idempotente: adiciona ajuste_oficial em bancos antigos
     try:
@@ -1784,20 +1793,37 @@ def _ferr_cartas_fii():
         st.info("Sem credenciais GitHub em st.secrets — o controle de 'lidas' valerá só "
                 "para esta sessão (zera ao recarregar).")
 
-    col1, col2, col3 = st.columns([1.2, 1.4, 0.8])
-    with col1:
+    # Quantos por lote (evita estouro de memória/tempo no Streamlit Cloud)
+    LOTE = 8
+
+    buffer_atual = _buffer_listar()
+    n_buffer = len(buffer_atual)
+
+    c1, c2, c3, c4 = st.columns([1.1, 1.5, 1.1, 0.9])
+    with c1:
         if st.button("🔍 Verificar novas", key="fii_check", use_container_width=True):
             st.session_state["fii_check_run"] = True
-    with col2:
-        if st.button("⬇️ Baixar não lidas → consolidar", key="fii_dl",
-                     type="primary", use_container_width=True):
+    with c2:
+        lbl = f"⬇️ Baixar lote ({LOTE} fundos)"
+        if st.button(lbl, key="fii_dl", type="primary", use_container_width=True):
             st.session_state["fii_dl_run"] = True
-    with col3:
+    with c3:
+        if st.button(f"📦 Consolidar ({n_buffer})", key="fii_consol",
+                     use_container_width=True, disabled=(n_buffer == 0),
+                     help="Gera o .md com tudo que já está no buffer (inclusive de execuções anteriores)."):
+            st.session_state["fii_consol_run"] = True
+    with c4:
         if st.button("↺ Limpar", key="fii_clear", use_container_width=True,
-                     help="Limpa o resultado e o log desta tela (não apaga as 'lidas')."):
-            for k in ("fii_check_run", "fii_dl_run", "fii_resultado", "fii_check_res"):
+                     help="Limpa o buffer de cartas baixadas e o log desta tela."):
+            _buffer_limpar()
+            for k in ("fii_check_run", "fii_dl_run", "fii_consol_run",
+                      "fii_resultado", "fii_check_res", "fii_consolidado"):
                 st.session_state.pop(k, None)
             st.rerun()
+
+    if n_buffer:
+        st.caption(f"📦 Buffer: {n_buffer} carta(s) já baixada(s) e salva(s) "
+                   f"(sobrevivem a reinício do app). Clique em Consolidar quando terminar.")
 
     # ── Verificação: lista o mais recente por fundo e marca o que é novo ──
     if st.session_state.get("fii_check_run"):
@@ -1807,7 +1833,7 @@ def _ferr_cartas_fii():
         rows = []
         novas = 0
         for i, tk in enumerate(FII_TICKERS):
-            prog_v.progress((i + 1) / len(FII_TICKERS), text=f"{tk}…")
+            prog_v.progress((i + 1) / len(FII_TICKERS), text=f"{tk} ({i+1}/{len(FII_TICKERS)})…")
             data_ref, url, err = _relfiis_mais_recente(tk)
             if err or not data_ref:
                 rows.append((tk, None, None, err or "sem dados"))
@@ -1820,7 +1846,6 @@ def _ferr_cartas_fii():
         prog_v.empty()
         st.session_state["fii_check_res"] = {"rows": rows, "novas": novas}
 
-    # Render do resultado da verificação (persiste entre reruns)
     if st.session_state.get("fii_check_res"):
         cr = st.session_state["fii_check_res"]
         st.markdown(f"**{cr['novas']} carta(s) nova(s)** de {len(FII_TICKERS)} fundos")
@@ -1838,132 +1863,145 @@ def _ferr_cartas_fii():
                        f'</span></div>')
         st.markdown(linhas, unsafe_allow_html=True)
 
-    # ── Download + extração + consolidação ──
+    # ── Download de UM LOTE com persistência incremental + log ao vivo ──
     if st.session_state.get("fii_dl_run"):
         st.session_state["fii_dl_run"] = False
         lidas = _carregar_lidas()
+        ja_no_buffer = _buffer_chaves()
+
+        # Define o lote: fundos ainda não lidos e ainda não no buffer.
+        # Cursor persistido para avançar a cada clique.
+        cursor = int(st.session_state.get("fii_cursor", 0))
+        if cursor >= len(FII_TICKERS):
+            cursor = 0  # recomeça o ciclo
+        fila = FII_TICKERS[cursor:cursor + LOTE]
+        st.session_state["fii_cursor"] = cursor + LOTE
+
+        prog = st.progress(0.0, text="Iniciando lote…")
+        log_box = st.empty()          # log ao vivo (reescreve a cada fundo)
+        log_live = []
         novas_chaves = []
-        itens = []
-        log = []  # (ticker, status, detalhe) — status: ok | lida | falha
-        erro_fatal = None
-        prog = st.progress(0.0, text="Iniciando…")
-        try:
-            for i, tk in enumerate(FII_TICKERS):
-                prog.progress((i + 1) / len(FII_TICKERS), text=f"{tk} ({i+1}/{len(FII_TICKERS)})…")
-                try:
-                    data_ref, url, err = _relfiis_mais_recente(tk)
-                    if err or not data_ref:
-                        log.append((tk, "falha", f"busca: {err or 'sem data'}"))
-                        continue
-                    if not url:
-                        log.append((tk, "falha", f"{data_ref}: link de download não encontrado"))
-                        continue
-                    chave = f"{tk}|{data_ref}"
-                    if chave in lidas:
-                        log.append((tk, "lida", data_ref))
-                        continue
-                    pdf_bytes, errd = _relfiis_baixar_pdf(url)
-                    if errd or not pdf_bytes:
-                        log.append((tk, "falha", f"{data_ref}: download — {errd or 'vazio'}"))
-                        continue
-                    periodo = data_ref.replace("/", "")
-                    nome = f"{tk}_{periodo}.pdf"
-                    if not (HAS_FITZ and HAS_PDFPLUMBER):
-                        log.append((tk, "falha", "extração indisponível (libs ausentes)"))
-                        continue
-                    _txt, _md, _info = _converter_pdf(pdf_bytes, nome, usar_ocr=True)
-                    itens.append((f"{tk}_{periodo}.md", _txt))
-                    novas_chaves.append(chave)
-                    extra = f"{_info['paginas']} pág."
-                    if _info.get("usou_ocr"):
-                        extra += " · OCR"
-                    log.append((tk, "ok", f"{data_ref} · {extra}"))
-                except Exception as e:
-                    # erro num fundo não derruba os demais
-                    log.append((tk, "falha", f"erro inesperado — {e}"))
-                    continue
-        except Exception as e:
-            erro_fatal = str(e)
-        finally:
-            prog.empty()
 
-        # Persiste 'lidas' imediatamente (independe do render do consolidado)
-        salvou = None
-        if novas_chaves:
+        def _render_log_live():
+            html = ""
+            for tk, status, det in log_live:
+                if status == "ok":
+                    ic, cor = "✅", "var(--green)"
+                elif status == "lida":
+                    ic, cor = "⏭️", "var(--text3)"
+                elif status == "buffer":
+                    ic, cor = "📦", "var(--accent)"
+                else:
+                    ic, cor = "⚠️", "var(--red)"
+                html += (f'<div style="font-family:\'JetBrains Mono\',monospace;'
+                         f'font-size:11.5px;padding:1px 0">{ic} <b>{tk}</b> '
+                         f'<span style="color:{cor}">{det}</span></div>')
+            log_box.markdown(html, unsafe_allow_html=True)
+
+        for i, tk in enumerate(fila):
+            prog.progress((i + 1) / len(fila),
+                          text=f"{tk} ({cursor+i+1}/{len(FII_TICKERS)})…")
             try:
-                todas = set(lidas) | set(novas_chaves)
-                salvou = _salvar_lidas(todas)
+                data_ref, url, err = _relfiis_mais_recente(tk)
+                if err or not data_ref:
+                    log_live.append((tk, "falha", f"busca: {err or 'sem data'}"))
+                    _render_log_live(); continue
+                chave = f"{tk}|{data_ref}"
+                if chave in lidas or chave in ja_no_buffer:
+                    log_live.append((tk, "lida", f"{data_ref} (já processada)"))
+                    _render_log_live(); continue
+                if not url:
+                    log_live.append((tk, "falha", f"{data_ref}: link não encontrado"))
+                    _render_log_live(); continue
+                pdf_bytes, errd = _relfiis_baixar_pdf(url)
+                if errd or not pdf_bytes:
+                    log_live.append((tk, "falha", f"{data_ref}: download — {errd or 'vazio'}"))
+                    _render_log_live(); continue
+                if not (HAS_FITZ and HAS_PDFPLUMBER):
+                    log_live.append((tk, "falha", "extração indisponível"))
+                    _render_log_live(); continue
+                periodo = data_ref.replace("/", "")
+                _txt, _md, _info = _converter_pdf(pdf_bytes, f"{tk}_{periodo}.pdf", usar_ocr=True)
+                # PERSISTE IMEDIATAMENTE no buffer (sobrevive a crash)
+                _buffer_salvar_carta(chave, tk, data_ref, periodo, _txt, _info.get("paginas", 0))
+                novas_chaves.append(chave)
+                extra = f"{_info.get('paginas', 0)} pág."
+                if _info.get("usou_ocr"):
+                    extra += " · OCR"
+                log_live.append((tk, "buffer", f"{data_ref} · {extra} · salvo no buffer ✓"))
+                _render_log_live()
             except Exception as e:
-                erro_fatal = (erro_fatal or "") + f" | salvar lidas: {e}"
+                log_live.append((tk, "falha", f"erro — {e}"))
+                _render_log_live()
+        prog.empty()
 
-        consolidado = _consolidar_textos(itens) if itens else None
-        # Guarda TUDO no session_state para sobreviver ao rerun do download_button
+        # marca lidas e faz backup do .db (buffer persistido)
+        if novas_chaves:
+            _salvar_lidas(set(lidas) | set(novas_chaves))
+            _auto_backup_github(motivo="cartas buffer")
+
+        prox = st.session_state["fii_cursor"]
+        restantes = max(0, len(FII_TICKERS) - prox)
         st.session_state["fii_resultado"] = {
-            "log": log,
-            "consolidado": consolidado,
-            "n_ok": len(itens),
-            "n_lida": sum(1 for _, s, _ in log if s == "lida"),
-            "n_falha": sum(1 for _, s, _ in log if s == "falha"),
-            "n_total": len(FII_TICKERS),
-            "salvou_lidas": salvou,
-            "erro_fatal": erro_fatal,
-            "nome_out": f"cartas_fii_{_brt_date().strftime('%Y%m%d')}.md",
             "ts": datetime.now().strftime("%H:%M:%S"),
+            "lote": [(tk, s, d) for tk, s, d in log_live],
+            "cursor": prox, "restantes": restantes,
+            "n_buffer": len(_buffer_listar()),
         }
 
-    # ── Render do resultado do download (persiste entre reruns) ──
+    # ── Render do resultado do último lote ──
     res = st.session_state.get("fii_resultado")
     if res:
         st.markdown("---")
-        if res.get("erro_fatal"):
-            st.error(f"Erro durante o processamento: {res['erro_fatal']}")
-        # Resumo
-        processados = res["n_ok"] + res["n_lida"] + res["n_falha"]
-        resumo = (f"✅ {res['n_ok']} nova(s) · "
-                  f"⏭️ {res['n_lida']} já lida(s) · "
-                  f"⚠️ {res['n_falha']} falha(s) · "
-                  f"{processados}/{res.get('n_total', '?')} processados  ·  {res['ts']}")
-        if res["n_ok"] > 0:
-            st.success(resumo)
-        elif res["n_falha"] > 0 and res["n_ok"] == 0:
-            st.warning(resumo + "  — nenhuma carta nova baixada.")
+        n_ok = sum(1 for _, s, _ in res["lote"] if s == "buffer")
+        n_lida = sum(1 for _, s, _ in res["lote"] if s == "lida")
+        n_falha = sum(1 for _, s, _ in res["lote"] if s == "falha")
+        msg = (f"Lote: 📦 {n_ok} baixada(s) · ⏭️ {n_lida} já feita(s) · "
+               f"⚠️ {n_falha} falha(s)  ·  {res['ts']}")
+        if res["restantes"] > 0:
+            st.info(msg + f"  —  faltam {res['restantes']} fundos. "
+                    "Clique em Baixar lote de novo para continuar.")
         else:
-            st.info(resumo)
+            st.success(msg + "  —  todos os fundos percorridos. Clique em Consolidar.")
+        with st.expander(f"📋 Log do lote ({len(res['lote'])} fundos)", expanded=True):
+            html = ""
+            for tk, status, det in res["lote"]:
+                if status == "buffer":
+                    ic, cor = "📦", "var(--accent)"
+                elif status == "lida":
+                    ic, cor = "⏭️", "var(--text3)"
+                elif status == "ok":
+                    ic, cor = "✅", "var(--green)"
+                else:
+                    ic, cor = "⚠️", "var(--red)"
+                html += (f'<div style="font-family:\'JetBrains Mono\',monospace;'
+                         f'font-size:11.5px;padding:1px 0">{ic} <b>{tk}</b> '
+                         f'<span style="color:{cor}">{det}</span></div>')
+            st.markdown(html or "—", unsafe_allow_html=True)
 
-        # Status da persistência das 'lidas'
-        if res["salvou_lidas"] is True:
-            st.caption("💾 Cartas novas marcadas como lidas e persistidas no GitHub.")
-        elif res["salvou_lidas"] is False:
-            st.caption("💾 Marcadas como lidas nesta sessão (GitHub indisponível — verifique secrets).")
+    # ── Consolidação a partir do BUFFER (resistente a crash) ──
+    if st.session_state.get("fii_consol_run"):
+        st.session_state["fii_consol_run"] = False
+        buf = _buffer_listar()
+        if not buf:
+            st.session_state["fii_consolidado"] = None
+        else:
+            itens = [(f"{c['ticker']}_{c['periodo']}.md", c["conteudo"]) for c in buf]
+            st.session_state["fii_consolidado"] = {
+                "texto": _consolidar_textos(itens),
+                "n": len(itens),
+                "nome": f"cartas_fii_{_brt_date().strftime('%Y%m%d')}.md",
+            }
 
-        # Consolidado: download + área para copiar
-        if res["consolidado"]:
-            st.download_button("⬇️ Baixar consolidado (.md)",
-                               res["consolidado"].encode("utf-8"),
-                               file_name=res["nome_out"], mime="text/markdown",
-                               key="fii_consol_dl", use_container_width=True)
-            st.text_area("Copiar para colar no Claude", res["consolidado"],
-                         height=240, key="fii_consol_txt")
-
-        # Log detalhado por fundo — sempre renderiza
-        n_log = len(res["log"])
-        with st.expander(f"📋 Log de execução ({n_log} fundos processados)", expanded=True):
-            if n_log == 0:
-                st.caption("Nenhum fundo processado — verifique a lista FII_TICKERS ou a conexão.")
-            else:
-                log_html = ""
-                for tk, status, detalhe in res["log"]:
-                    if status == "ok":
-                        ic, cor = "✅", "var(--green)"
-                    elif status == "lida":
-                        ic, cor = "⏭️", "var(--text3)"
-                    else:
-                        ic, cor = "⚠️", "var(--red)"
-                    log_html += (f'<div style="font-family:\'JetBrains Mono\',monospace;'
-                                 f'font-size:11.5px;padding:1px 0">'
-                                 f'{ic} <b>{tk}</b> '
-                                 f'<span style="color:{cor}">{detalhe}</span></div>')
-                st.markdown(log_html, unsafe_allow_html=True)
+    cons = st.session_state.get("fii_consolidado")
+    if cons:
+        st.markdown("---")
+        st.success(f"Consolidado gerado com {cons['n']} carta(s) do buffer.")
+        st.download_button("⬇️ Baixar consolidado (.md)", cons["texto"].encode("utf-8"),
+                           file_name=cons["nome"], mime="text/markdown",
+                           key="fii_consol_dl", use_container_width=True)
+        st.text_area("Copiar para colar no Claude", cons["texto"], height=240,
+                     key="fii_consol_txt")
 
 
 # ── 6) Busca em ofertas CVM ────────────────────────────────────
@@ -2601,6 +2639,52 @@ def _salvar_lidas(chaves):
     ok, _ = _gh_put_json(_CARTAS_LIDAS_PATH, {"lidas": sorted(chaves)},
                          f"cartas lidas {_brt_today()}")
     return ok
+
+
+# ── Buffer de cartas no SQLite (sobrevive a crash/reinício do app) ──
+def _buffer_salvar_carta(chave, ticker, data_ref, periodo, conteudo, paginas):
+    """Grava uma carta extraída no buffer local. Rápido (sem rede)."""
+    try:
+        with _db() as con:
+            con.execute(
+                "INSERT OR REPLACE INTO cartas_buffer"
+                " (chave, ticker, data_ref, periodo, conteudo, paginas, saved_at)"
+                " VALUES (?,?,?,?,?,?,?)",
+                (chave, ticker, data_ref, periodo, conteudo, paginas, int(_time.time())))
+        return True
+    except Exception:
+        return False
+
+
+def _buffer_listar():
+    """Retorna lista de dicts das cartas no buffer (ordenado por ticker)."""
+    try:
+        with _db() as con:
+            rows = con.execute(
+                "SELECT chave, ticker, data_ref, periodo, conteudo, paginas, saved_at"
+                " FROM cartas_buffer ORDER BY ticker").fetchall()
+        return [{"chave": r[0], "ticker": r[1], "data_ref": r[2], "periodo": r[3],
+                 "conteudo": r[4], "paginas": r[5], "saved_at": r[6]} for r in rows]
+    except Exception:
+        return []
+
+
+def _buffer_chaves():
+    """Set de chaves já presentes no buffer (para não rebaixar)."""
+    try:
+        with _db() as con:
+            return {r[0] for r in con.execute("SELECT chave FROM cartas_buffer").fetchall()}
+    except Exception:
+        return set()
+
+
+def _buffer_limpar():
+    try:
+        with _db() as con:
+            con.execute("DELETE FROM cartas_buffer")
+        return True
+    except Exception:
+        return False
 
 
 def render_curva_di(di):
