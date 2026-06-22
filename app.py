@@ -3409,11 +3409,15 @@ def compute_run_premio(rtype):
 
 
 def compute_run_movement(rtype):
-    """Movimentação D/D: mid do run mais recente vs run anterior, por ativo."""
+    """Movimentação D/D: mid do run mais recente vs run de 1 dia útil atrás
+    (D-1, respeitando feriados via calendário ANBIMA), por ativo."""
     dates = load_run_dates(rtype)
     if len(dates) < 2:
         return None
-    cur, prev = load_run_on(rtype, dates[0]), load_run_on(rtype, dates[1])
+    prev_date = pick_prev_run_date(dates, 1)
+    if prev_date is None:
+        return None
+    cur, prev = load_run_on(rtype, dates[0]), load_run_on(rtype, prev_date)
     if cur is None or prev is None:
         return None
     cur = cur.copy(); prev = prev.copy()
@@ -3431,7 +3435,7 @@ def compute_run_movement(rtype):
     if j.empty:
         return None
     j["delta_bps"] = (j["mid"] - j["mid_p"]) * 100
-    return {"cur": dates[0], "prev": dates[1], "df": j}
+    return {"cur": dates[0], "prev": prev_date, "df": j}
 
 
 def _compute_top_movers(run_type, n_du: int = 1):
