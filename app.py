@@ -1648,6 +1648,65 @@ def _converter_pdf(file_bytes: bytes, nome: str, usar_ocr: bool = False):
 def render_ferramentas(di_data=None, anbima_df=None):
     st.markdown('<div class="aux-tab-banner">🛠️ Ferramentas — utilitários do dia a dia</div>',
                 unsafe_allow_html=True)
+    # CSS escopado às abas ANINHADAS (toda barra de abas dentro de um
+    # tab-panel — caso de Ferramentas). Usa o seletor estrutural
+    # [data-baseweb="tab-panel"] .stTabs, que é garantido pelo Streamlit e não
+    # depende de âncora frágil. Corrige:
+    #  - flex-wrap global (jogava a 7ª aba para outra linha → parecia "solta");
+    #  - regras de separador/auxiliar (nth-child 7 / n+7) das abas PRINCIPAIS,
+    #    que vazavam e deixavam a 7ª aba ("Busca nos Runs") cinza e travada.
+    st.markdown("""
+    <style>
+    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"]{
+        flex-wrap: nowrap !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        scrollbar-width: thin;
+    }
+    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]{
+        flex: 0 0 auto !important;
+        pointer-events: auto !important;
+        cursor: pointer !important;
+        opacity: 1 !important;
+        color: var(--text2) !important;
+        background: transparent !important;
+        border-left: none !important;
+        margin-left: 0 !important;
+        user-select: auto !important;
+        box-shadow: none !important;
+        text-transform: uppercase !important;
+        letter-spacing: .02em !important;
+    }
+    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"] p{
+        font-size: 12px !important;
+    }
+    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:hover{
+        color: var(--text1) !important; background: var(--surf2) !important;
+    }
+    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"][aria-selected="true"]{
+        background: var(--accentbg) !important; color: var(--accent) !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,.04) !important;
+    }
+    /* Override de mesma especificidade das regras de separador das abas
+       principais (nth-child 7 e n+7), restrito ao contexto aninhado. */
+    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(7){
+        pointer-events: auto !important; cursor: pointer !important;
+        color: var(--text2) !important; background: transparent !important;
+        box-shadow: none !important; padding: 8px 16px !important;
+        font-size: 12px !important; font-weight: 600 !important;
+        letter-spacing: .02em !important; opacity: 1 !important;
+        border-left: none !important; margin-left: 0 !important;
+        user-select: auto !important;
+    }
+    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(7)[aria-selected="true"]{
+        background: var(--accentbg) !important; color: var(--accent) !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,.04) !important;
+    }
+    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(n+7) p{
+        font-size: 12px !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     # Cada item: (rótulo, callable). Renderizar por lista mantém os rótulos
     # completos e garante reconstrução consistente da barra de abas.
     _ferramentas = [
