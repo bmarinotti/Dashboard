@@ -1648,17 +1648,26 @@ def _converter_pdf(file_bytes: bytes, nome: str, usar_ocr: bool = False):
 def render_ferramentas(di_data=None, anbima_df=None):
     st.markdown('<div class="aux-tab-banner">🛠️ Ferramentas — utilitários do dia a dia</div>',
                 unsafe_allow_html=True)
-    sub = st.tabs([
-        "Conversor PDF", "Consolidador", "Calculadora de bond",
-        "Conversor de taxas", "Cartas FII", "Busca CVM", "Busca nos Runs",
-    ])
-    with sub[0]: _ferr_conversor_pdf()
-    with sub[1]: _ferr_consolidador()
-    with sub[2]: _ferr_calculadora_bond()
-    with sub[3]: _ferr_conversor_taxas(di_data, anbima_df)
-    with sub[4]: _ferr_cartas_fii()
-    with sub[5]: _ferr_busca_cvm()
-    with sub[6]: _ferr_busca_runs()
+    # Cada item: (rótulo, callable). Renderizar por lista mantém os rótulos
+    # completos e garante reconstrução consistente da barra de abas.
+    _ferramentas = [
+        ("Conversor PDF",      _ferr_conversor_pdf),
+        ("Consolidador",       _ferr_consolidador),
+        ("Calculadora de bond", _ferr_calculadora_bond),
+        ("Conversor de taxas", lambda: _ferr_conversor_taxas(di_data, anbima_df)),
+        ("Cartas FII",         _ferr_cartas_fii),
+        ("Busca CVM",          _ferr_busca_cvm),
+        ("Busca nos Runs",     _ferr_busca_runs),
+    ]
+    sub = st.tabs([lbl for lbl, _ in _ferramentas])
+    for tab, (lbl, fn) in zip(sub, _ferramentas):
+        with tab:
+            try:
+                fn()
+            except Exception as e:
+                # Blindagem: uma exceção no corpo de uma aba não deve deixá-la
+                # "cinza"/inacessível — mostra o erro dentro da própria aba.
+                st.error(f"Erro ao renderizar “{lbl}”: {e}")
 
 
 # ── 1) Conversor PDF ───────────────────────────────────────────
