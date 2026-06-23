@@ -836,6 +836,79 @@ def fd2(v, dec: int = 2, suffix: str = ""):
 # ================================================================
 # MACAULAY DURATION (NTN-B)
 # ================================================================
+def _interp_di_por_anos(di_data, anos):
+    """Interpola a taxa DI (% a.a.) no vértice de `anos` (em anos), por dias úteis.
+    Usa o último negociado (fallback ajuste). Retorna (taxa_pct, None) ou
+    (None, motivo)."""
+    if di_data is None or not di_data.get("tickers"):
+        return None, "curva DI indisponível"
+    if anos is None or anos <= 0:
+        return None, "duration inválida"
+    today = _brt_date()
+    pts = []  # (du, taxa)
+    for v in di_data["tickers"].values():
+        venc = v.get("vencimento")
+        tx   = v.get("ultimo") if v.get("ultimo") is not None else v.get("ajuste")
+        if not venc or tx is None:
+            continue
+        try:
+            vd = date.fromisoformat(venc)
+        except (ValueError, TypeError):
+            continue
+        du = count_du(today, vd)
+        if du > 0:
+            pts.append((du, float(tx)))
+    if len(pts) < 2:
+        return None, "pontos insuficientes na curva DI"
+    pts.sort(key=lambda x: x[0])
+    alvo_du = anos * 252.0
+    dus  = [p[0] for p in pts]
+    taxas = [p[1] for p in pts]
+    if alvo_du <= dus[0]:
+        return taxas[0], None          # antes do 1º vértice → extremo
+    if alvo_du >= dus[-1]:
+        return taxas[-1], None         # após o último → extremo
+    i = bisect.bisect_left(dus, alvo_du)
+    x0, x1 = dus[i-1], dus[i]
+    y0, y1 = taxas[i-1], taxas[i]
+    if x1 == x0:
+        return y1, None
+    return y0 + (y1 - y0) * (alvo_du - x0) / (x1 - x0), None
+
+
+def _interp_ntnb_por_dur(anbima_df, anos):
+    """Interpola o juro real NTN-B (% a.a.) no vértice de duration `anos`.
+    Retorna (taxa_pct, None) ou (None, motivo)."""
+    if anbima_df is None or anbima_df.empty:
+        return None, "curva NTN-B indisponível"
+    if anos is None or anos <= 0:
+        return None, "duration inválida"
+    d = anbima_df.dropna(subset=["duration", "tx_ind"]).copy()
+    if len(d) < 2:
+        return None, "pontos insuficientes na curva NTN-B"
+    d = d.sort_values("duration")
+    durs = d["duration"].tolist()
+    taxas = d["tx_ind"].tolist()
+    if anos <= durs[0]:
+        return taxas[0], None
+    if anos >= durs[-1]:
+        return taxas[-1], None
+    i = bisect.bisect_left(durs, anos)
+    x0, x1 = durs[i-1], durs[i]
+    y0, y1 = taxas[i-1], taxas[i]
+    if x1 == x0:
+        return y1, None
+    return y0 + (y1 - y0) * (anos - x0) / (x1 - x0), None
+
+
+def _breakeven_inflacao(di_pct, ntnb_pct):
+    """Inflação implícita (breakeven) composta entre DI nominal e NTN-B real:
+    (1+di)/(1+real) − 1. Em % a.a."""
+    if di_pct is None or ntnb_pct is None:
+        return None
+    return ((1 + di_pct / 100.0) / (1 + ntnb_pct / 100.0) - 1) * 100.0
+
+
 def calc_duration(vencimento, tx_ind, today_date=None):
     if tx_ind is None or (isinstance(tx_ind, float) and np.isnan(tx_ind)):
         return None
@@ -1316,6 +1389,9 @@ def render_conteudo_dinamico(current_calls):
     st.session_state.setdefault("limiar_bps", LIMIAR_BPS_DEFAULT)
 
     # ── Abas ──────────────────────────────────────────────────
+    # Aba "NTN-B ANBIMA" ocultada a pedido — função render_ntnb_anbima e demais
+    # estruturas permanecem no código; para reativar, reinsira o rótulo na lista
+    # abaixo (na posição desejada) e a chamada `with tabs[N]: render_ntnb_anbima(anbima_df, ref_dt)`.
     tabs = st.tabs([
         "Principal",
         "Primário CVM",
@@ -1327,7 +1403,6 @@ def render_conteudo_dinamico(current_calls):
         "Runs corretora",
         "Calls NTN-B",
         "FRA",
-        "NTN-B ANBIMA",
         "Ferramentas",
     ])
     with tabs[0]: render_principal(di_data, anbima_df, current_calls, ajuste_locked, prev_bday_ajuste)
@@ -1339,8 +1414,7 @@ def render_conteudo_dinamico(current_calls):
     with tabs[7]: render_runs(anbima_df)
     with tabs[8]: render_calls(anbima_df, current_calls, save_calls)
     with tabs[9]: render_curva_di(di_data)
-    with tabs[10]: render_ntnb_anbima(anbima_df, ref_dt)
-    with tabs[11]: render_ferramentas()
+    with tabs[10]: render_ferramentas(di_data, anbima_df)
 
 
 # ================================================================
@@ -1571,19 +1645,20 @@ def _converter_pdf(file_bytes: bytes, nome: str, usar_ocr: bool = False):
     return txt, md, info
 
 
-def render_ferramentas():
+def render_ferramentas(di_data=None, anbima_df=None):
     st.markdown('<div class="aux-tab-banner">🛠️ Ferramentas — utilitários do dia a dia</div>',
                 unsafe_allow_html=True)
     sub = st.tabs([
         "Conversor PDF", "Consolidador", "Calculadora de bond",
-        "Conversor de taxas", "Cartas FII", "Busca CVM",
+        "Conversor de taxas", "Cartas FII", "Busca CVM", "Busca nos Runs",
     ])
     with sub[0]: _ferr_conversor_pdf()
     with sub[1]: _ferr_consolidador()
     with sub[2]: _ferr_calculadora_bond()
-    with sub[3]: _ferr_conversor_taxas()
+    with sub[3]: _ferr_conversor_taxas(di_data, anbima_df)
     with sub[4]: _ferr_cartas_fii()
     with sub[5]: _ferr_busca_cvm()
+    with sub[6]: _ferr_busca_runs()
 
 
 # ── 1) Conversor PDF ───────────────────────────────────────────
@@ -1602,7 +1677,12 @@ def _ferr_conversor_pdf():
     )
     ups = st.file_uploader("Selecione um ou mais PDFs", type=["pdf"],
                            accept_multiple_files=True, key="pdf_conv_up")
+    # O processamento só roda ao clicar "Converter" e o RESULTADO fica em
+    # session_state. Assim, ao clicar num download_button (que re-executa o
+    # script), os arquivos já convertidos NÃO são perdidos — são re-renderizados
+    # a partir do estado, e não do bloco condicional do botão "Converter".
     if ups and st.button("Converter", type="primary", key="pdf_conv_btn"):
+        resultados = []
         for up in ups:
             nome = up.name
             base = nome[:-4] if nome.lower().endswith(".pdf") else nome
@@ -1610,23 +1690,40 @@ def _ferr_conversor_pdf():
                 with st.spinner(f"Processando {nome}…"):
                     txt, md, info = _converter_pdf(up.getvalue(), nome, usar_ocr=ocr_on)
             except Exception as e:
-                st.error(f"{nome}: erro — {e}")
+                resultados.append({"nome": nome, "base": base, "erro": str(e)})
                 continue
+            resultados.append({"nome": nome, "base": base, "txt": txt, "md": md,
+                               "info": info, "erro": None})
+        st.session_state["pdf_conv_resultados"] = resultados
+
+    resultados = st.session_state.get("pdf_conv_resultados")
+    if resultados:
+        c_lbl, c_clr = st.columns([4, 1])
+        with c_clr:
+            if st.button("Limpar", key="pdf_conv_clear", use_container_width=True):
+                del st.session_state["pdf_conv_resultados"]
+                st.rerun(scope="fragment")
+        for res in resultados:
+            base = res["base"]
+            if res["erro"]:
+                st.error(f"{res['nome']}: erro — {res['erro']}")
+                continue
+            info = res["info"]
             meta = f"{info['paginas']} pág."
             if info["usou_ocr"]:
                 meta += " · OCR usado"
             if info["pags_vazias"]:
                 meta += f" · {info['pags_vazias']} sem texto"
-            st.markdown(f"**{nome}** — {meta}")
+            st.markdown(f"**{res['nome']}** — {meta}")
             c1, c2 = st.columns(2)
             with c1:
-                st.download_button("⬇️ .txt", txt.encode("utf-8"), file_name=f"{base}.txt",
+                st.download_button("⬇️ .txt", res["txt"].encode("utf-8"), file_name=f"{base}.txt",
                                    mime="text/plain", key=f"dl_txt_{base}", use_container_width=True)
             with c2:
-                st.download_button("⬇️ .md", md.encode("utf-8"), file_name=f"{base}.md",
+                st.download_button("⬇️ .md", res["md"].encode("utf-8"), file_name=f"{base}.md",
                                    mime="text/markdown", key=f"dl_md_{base}", use_container_width=True)
             with st.expander(f"Prévia — {base}.txt", expanded=False):
-                st.text(txt[:4000] + ("\n…(truncado)" if len(txt) > 4000 else ""))
+                st.text(res["txt"][:4000] + ("\n…(truncado)" if len(res["txt"]) > 4000 else ""))
 
 
 # ── 2) Consolidador TXT/MD ─────────────────────────────────────
@@ -1646,10 +1743,19 @@ def _ferr_consolidador():
                 conteudo = up.getvalue().decode("latin-1", errors="replace")
             itens.append((up.name, conteudo))
         consolidado = _consolidar_textos(itens)
-        nome_out = f"consolidado_{_brt_date().strftime('%Y%m%d')}.md"
-        st.success(f"{len(itens)} documento(s) consolidados · {len(consolidado)//1024} KB")
+        # Persiste em session_state para o download não ser perdido no rerun.
+        st.session_state["consol_resultado"] = {
+            "consolidado": consolidado,
+            "nome_out": f"consolidado_{_brt_date().strftime('%Y%m%d')}.md",
+            "n_itens": len(itens),
+        }
+
+    consol_res = st.session_state.get("consol_resultado")
+    if consol_res:
+        consolidado = consol_res["consolidado"]
+        st.success(f"{consol_res['n_itens']} documento(s) consolidados · {len(consolidado)//1024} KB")
         st.download_button("⬇️ Baixar consolidado (.md)", consolidado.encode("utf-8"),
-                           file_name=nome_out, mime="text/markdown",
+                           file_name=consol_res["nome_out"], mime="text/markdown",
                            key="consol_dl", use_container_width=True)
         with st.expander("Prévia", expanded=False):
             st.text(consolidado[:4000] + ("\n…(truncado)" if len(consolidado) > 4000 else ""))
@@ -1735,7 +1841,7 @@ def _ferr_calculadora_bond():
 
 
 # ── 4) Conversor de taxas ──────────────────────────────────────
-def _ferr_conversor_taxas():
+def _ferr_conversor_taxas(di_data=None, anbima_df=None):
     st.markdown("##### Conversor de taxas")
     st.caption("Conversões usuais de mesa: a.a.↔a.m. (base 252), % do CDI ↔ CDI+spread, "
                "e CDI+ ↔ IPCA+ (mantendo a taxa nominal equivalente).")
@@ -1762,18 +1868,56 @@ def _ferr_conversor_taxas():
         st.caption(f"→ {_r:.2f}% do CDI" if _r else "→ —")
 
     st.markdown("---")
-    st.markdown("**CDI+ ↔ IPCA+** (taxa nominal equivalente)")
-    i1, i2, i3 = st.columns(3)
-    with i1:
-        ipca = st.number_input("IPCA projetado (% a.a.)", value=4.0, step=0.25, key="cv_ipca")
-    with i2:
-        scdi = st.number_input("Spread sobre CDI (% a.a.)", value=3.0, step=0.10, key="cv_scdi")
-        st.caption(f"CDI+{scdi:.2f}% → IPCA+{_converter_cdi_ipca('cdi_para_ipca', scdi, cdi, ipca):.2f}%")
-    with i3:
-        sipca = st.number_input("Spread real sobre IPCA (% a.a.)", value=7.0, step=0.10, key="cv_sipca")
-        st.caption(f"IPCA+{sipca:.2f}% → CDI+{_converter_cdi_ipca('ipca_para_cdi', sipca, cdi, ipca):.2f}%")
-    st.caption("Premissa: taxa nominal = (1+CDI)·(1+spread) = (1+IPCA)·(1+spread_real). "
-               "Resultado depende da projeção de IPCA informada.")
+    st.markdown("**CDI+ ↔ IPCA+ por duration** (DI e inflação implícita lidos da curva)")
+    st.caption("Informe a duration do papel. O DI do vértice é interpolado da curva DI "
+               "(B3) e a inflação implícita é o breakeven (DI − NTN-B) na mesma duration. "
+               "A conversão mantém a taxa nominal equivalente.")
+
+    dur = st.number_input("Duration (anos)", value=4.0, min_value=0.1, max_value=40.0,
+                          step=0.25, key="cv_dur")
+    di_dur, di_err     = _interp_di_por_anos(di_data, dur)
+    ntnb_dur, ntnb_err = _interp_ntnb_por_dur(anbima_df, dur)
+    be = _breakeven_inflacao(di_dur, ntnb_dur)
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("DI @ duration", f"{di_dur:.2f}%" if di_dur is not None else "—",
+              help=di_err or "Interpolado da curva DI por dias úteis.")
+    m2.metric("NTN-B @ duration", f"{ntnb_dur:.2f}%" if ntnb_dur is not None else "—",
+              help=ntnb_err or "Interpolado da curva NTN-B por duration.")
+    m3.metric("Inflação implícita", f"{be:.2f}%" if be is not None else "—",
+              help="Breakeven composto: (1+DI)/(1+NTN-B) − 1.")
+
+    if di_dur is None or be is None:
+        st.warning("Curvas indisponíveis para esta duration — não é possível converter "
+                   "automaticamente. Use a seção manual abaixo.")
+    else:
+        cdi_dur = di_dur  # DI da duration ≈ CDI esperado para o horizonte
+        i1, i2 = st.columns(2)
+        with i1:
+            scdi = st.number_input("Spread sobre CDI (% a.a.)", value=2.0, step=0.10,
+                                   key="cv_scdi_dur")
+            _res = _converter_cdi_ipca("cdi_para_ipca", scdi, cdi_dur, be)
+            st.caption(f"CDI+{scdi:.2f}% → **IPCA+{_res:.2f}%**")
+        with i2:
+            sipca = st.number_input("Spread real sobre IPCA (% a.a.)", value=7.0, step=0.10,
+                                    key="cv_sipca_dur")
+            _res2 = _converter_cdi_ipca("ipca_para_cdi", sipca, cdi_dur, be)
+            st.caption(f"IPCA+{sipca:.2f}% → **CDI+{_res2:.2f}%**")
+        st.caption(f"Usando DI={cdi_dur:.2f}% e IPCA implícita={be:.2f}% no vértice de "
+                   f"{dur:.2f} anos. Premissa: (1+DI)·(1+spread) = (1+IPCA)·(1+spread_real).")
+
+    with st.expander("Conversão manual (CDI e IPCA informados à mão)"):
+        i1, i2, i3 = st.columns(3)
+        with i1:
+            ipca = st.number_input("IPCA projetado (% a.a.)", value=4.0, step=0.25, key="cv_ipca")
+        with i2:
+            scdi_m = st.number_input("Spread sobre CDI (% a.a.)", value=3.0, step=0.10, key="cv_scdi")
+            st.caption(f"CDI+{scdi_m:.2f}% → IPCA+{_converter_cdi_ipca('cdi_para_ipca', scdi_m, cdi, ipca):.2f}%")
+        with i3:
+            sipca_m = st.number_input("Spread real sobre IPCA (% a.a.)", value=7.0, step=0.10, key="cv_sipca")
+            st.caption(f"IPCA+{sipca_m:.2f}% → CDI+{_converter_cdi_ipca('ipca_para_cdi', sipca_m, cdi, ipca):.2f}%")
+        st.caption("Premissa: taxa nominal = (1+CDI)·(1+spread) = (1+IPCA)·(1+spread_real). "
+                   "Resultado depende da projeção de IPCA informada.")
 
 
 # ── 5) Cartas FII ──────────────────────────────────────────────
@@ -2050,6 +2194,86 @@ def _ferr_busca_cvm():
             "Volume": _fmt_bi(r.get(vol_col)) if vol_col else "—",
         })
     st.dataframe(pd.DataFrame(out), use_container_width=True, hide_index=True)
+
+
+def _ferr_busca_runs():
+    st.markdown("##### Busca nos Runs")
+    st.caption("Pesquisa nos 5 calls mais recentes (CDI+, IPCA+ e LF) por código de "
+               "debênture ou por nome de emissor (substring na coluna emissor). Traz "
+               "bid/ask, emissor e duration de cada código em cada call. Para debêntures "
+               "IPCA+, mostra o spread over B (bps) no lugar das taxas nominais; para LF, "
+               "a busca é só por emissor.")
+    termo = st.text_input("Código ou emissor", key="bruns_termo",
+                          placeholder="ex.: RBRY11, Direcional, ENGIE…")
+    if not termo or len(termo.strip()) < 2:
+        st.caption("Digite ao menos 2 caracteres.")
+        return
+
+    res = busca_runs_recentes(termo, n_calls=5)
+    if res is None or res.empty:
+        st.info(f"Nenhum ativo encontrado para “{termo}” nos últimos 5 calls.")
+        return
+
+    def _fmt_data(iso):
+        try:
+            return datetime.fromisoformat(iso).strftime("%d/%m/%Y")
+        except Exception:
+            return iso or "—"
+
+    out = []
+    for _, r in res.iterrows():
+        rtype = r.get("run_type")
+        is_ipca = (rtype == "IPCA")
+        compra = r.get("compra")
+        venda  = r.get("venda")
+        sob    = r.get("spread_b")
+        dur    = r.get("duration")
+        if is_ipca:
+            # Spread over B no lugar das taxas nominais. Se spread_b não foi
+            # gravado (runs antigos), calcula on-the-fly via anbima do run.
+            if sob is None and r.get("anbima") is not None:
+                if pd.notna(compra) and pd.notna(venda):
+                    sob = ((compra + venda) / 2.0 - r.get("anbima")) * 100.0
+                elif pd.notna(compra):
+                    sob = (compra - r.get("anbima")) * 100.0
+                elif pd.notna(venda):
+                    sob = (venda - r.get("anbima")) * 100.0
+            bid_txt = f"B+{sob:.0f} bps" if sob is not None and pd.notna(sob) else "—"
+            ask_txt = "—"  # spread over B é por mid; bid/ask nominais ficam ocultos
+            # Para IPCA, mostramos o SOB calculado a partir do mid; mantemos
+            # bid/ask nominais numa coluna auxiliar para referência.
+            bidask_nom = (f"{fr(compra,2)} / {fr(venda,2)}"
+                          if pd.notna(compra) or pd.notna(venda) else "—")
+            out.append({
+                "Call": _fmt_data(r.get("brt_date")),
+                "Tipo": rtype,
+                "Código": r.get("ativo") or "—",
+                "Emissor": (str(r.get("emissor") or "—"))[:38],
+                "Spread over B": bid_txt,
+                "Bid/Ask (nom.)": bidask_nom,
+                "Duration": f"{dur:.2f}" if pd.notna(dur) and dur else "—",
+            })
+        else:
+            out.append({
+                "Call": _fmt_data(r.get("brt_date")),
+                "Tipo": rtype,
+                "Código": r.get("ativo") or "—",
+                "Emissor": (str(r.get("emissor") or "—"))[:38],
+                "Spread over B": "—",
+                "Bid/Ask (nom.)": (f"{fr(compra,2)} / {fr(venda,2)}"
+                                   if pd.notna(compra) or pd.notna(venda) else "—"),
+                "Duration": f"{dur:.2f}" if pd.notna(dur) and dur else "—",
+            })
+
+    odf = pd.DataFrame(out)
+    n_codigos = res["ativo"].dropna().nunique() if "ativo" in res.columns else 0
+    n_calls_hit = res["brt_date"].nunique() if "brt_date" in res.columns else 0
+    st.caption(f"{len(odf)} linha(s) · {n_codigos} código(s) distinto(s) · "
+               f"presente(s) em {n_calls_hit} call(s)")
+    st.dataframe(odf, use_container_width=True, hide_index=True)
+    st.caption("IPCA+: 'Spread over B' usa o mid (bid/ask) sobre a NTN-B de referência "
+               "do run; coluna 'Bid/Ask (nom.)' mostra as taxas nominais para conferência. "
+               "Runs antigos sem spread gravado têm o SOB recalculado on-the-fly.")
 
 
 def render_feed_comunicados():
@@ -4450,6 +4674,35 @@ def _anb_grupo(indice: str) -> str:
 _RUN_LABELS = {"CDI": "Debêntures CDI+", "IPCA": "Debêntures IPCA+",
                "LF": "Instituições Financeiras (LF)"}
 
+# Papéis indexados a % do CDI (ex.: "108% CDI") têm escala de taxa/variação
+# diferente das CDI+ e IPCA+ (spread). Para eles, o piso de relevância é maior.
+LIMIAR_PCT_CDI_BPS = 100
+
+
+def _is_pct_cdi(indexador) -> str:
+    """True se o indexador for '% do CDI' (ex.: '%CDI', 'CDI' sem o '+').
+    Distingue de 'CDI+' (spread). Retorna bool."""
+    if indexador is None:
+        return False
+    s = str(indexador).strip().lower().replace(" ", "")
+    if not s:
+        return False
+    if "+" in s:                       # 'CDI+' é spread, não % do CDI
+        return False
+    # '%cdi', 'cdi%', 'cdi', '108%cdi', 'docdi' → % do CDI
+    return ("cdi" in s) and ("%" in s or s in ("cdi", "docdi"))
+
+
+def _fmt_taxa_mover(indexador, mid) -> str:
+    """Formata a taxa exibida no Top Movers do Call.
+    %CDI  → 'NN,NN% CDI' (sem espaço entre número e '%').
+    CDI+/IPCA+ → '{idx}NN,NN%' (comportamento original)."""
+    if mid is None:
+        return "—"
+    if _is_pct_cdi(indexador):
+        return f"{fr(mid, 2)}% CDI"
+    return f"{indexador or ''}{fr(mid, 2)}%"
+
 
 def _run_norm(s):
     import unicodedata
@@ -4567,10 +4820,24 @@ def save_run(rtype, run_date, rows):
     recs = []
     for a in rows:
         key = a.get("ativo") or f'{a.get("tipo","")}|{a.get("emissor","")}|{a.get("vencimento","")}'
+        # Spread over B (bps) p/ runs IPCA+: mid (compra/venda) − NTN-B de
+        # referência do próprio run (coluna 'anbima', que o corretor já manda
+        # interpolada por papel). Só calcula quando há bid, ask e anbima.
+        spread_b = None
+        if rtype == "IPCA":
+            comp = a.get("compra")
+            vend = a.get("venda")
+            anb  = a.get("anbima")
+            if comp is not None and vend is not None and anb is not None:
+                spread_b = ((comp + vend) / 2.0 - anb) * 100.0
+            elif comp is not None and anb is not None:
+                spread_b = (comp - anb) * 100.0
+            elif vend is not None and anb is not None:
+                spread_b = (vend - anb) * 100.0
         recs.append((run_date, rtype, ts, key, a.get("emissor"), a.get("tipo"),
                      a.get("vencimento"), a.get("indexador"), a.get("compra"),
                      a.get("venda"), a.get("anbima"), a.get("duration"),
-                     a.get("rating"), None, None))
+                     a.get("rating"), None, spread_b))
     try:
         with _db() as con:
             con.execute("DELETE FROM credito_runs WHERE brt_date=? AND run_type=?",
@@ -4595,6 +4862,54 @@ def load_run_dates(rtype):
         return [x[0] for x in r if x[0]]
     except Exception:
         return []
+
+
+def busca_runs_recentes(termo: str, n_calls: int = 5) -> pd.DataFrame:
+    """Busca, nos `n_calls` runs mais recentes (qualquer tipo), por código de
+    ativo OU substring no nome do emissor. Retorna DataFrame com coluna
+    'origem' = data do run e 'run_type'.
+    - Debênture IPCA: traz spread_b (bps) em vez das taxas nominais.
+    - LF: sem 'ativo' → match apenas por emissor.
+    Match é case/acento-insensitive (via _norm_txt)."""
+    termo_n = _norm_txt(termo or "")
+    if len(termo_n) < 2:
+        return pd.DataFrame()
+    try:
+        with _db() as con:
+            datas = con.execute(
+                "SELECT DISTINCT brt_date FROM credito_runs"
+                " ORDER BY brt_date DESC LIMIT ?", (n_calls,),
+            ).fetchall()
+            datas = [d[0] for d in datas if d[0]]
+            if not datas:
+                return pd.DataFrame()
+            placeholders = ",".join("?" * len(datas))
+            df = pd.read_sql_query(
+                "SELECT brt_date, run_type, ativo, emissor, tipo, vencimento,"
+                " indexador, compra, venda, anbima, duration, spread_b, rating"
+                f" FROM credito_runs WHERE brt_date IN ({placeholders})",
+                con, params=datas,
+            )
+    except Exception:
+        return pd.DataFrame()
+    if df.empty:
+        return df
+
+    # Match: ativo (código) OU emissor contêm o termo. Para LF não há 'ativo'.
+    def _match(row):
+        for campo in ("ativo", "emissor"):
+            val = row.get(campo)
+            if val is not None and termo_n in _norm_txt(str(val)):
+                return True
+        return False
+
+    res = df[df.apply(_match, axis=1)].copy()
+    if res.empty:
+        return res
+    # Ordena por data desc e mantém a aparição em cada call (sem deduplicar:
+    # o usuário quer ver o bid/ask em cada um dos últimos calls).
+    res = res.sort_values(["brt_date", "run_type", "ativo"], ascending=[False, True, True])
+    return res
 
 
 # ── Periodicidade de análise (dias úteis para trás) ──────────────
@@ -5871,7 +6186,9 @@ def render_cvm():
         if c and c not in default_cols_present:
             default_cols_present.append(c)
 
-    # ── "Novas desde última visita" (persistido em SQLite) ─────
+    # ── Marcação de "última visita" (persistida em SQLite) ─────
+    # O KPI "Novas desde última visita" foi substituído por "Volume de Dívidas
+    # Registradas". Mantemos o cálculo/marcação caso o indicador volte no futuro.
     last_visit = get_meta("cvm_last_visit")
     novas_n = 0
     if last_visit:
@@ -5880,7 +6197,6 @@ def render_cvm():
             novas_n = int((df[date_col] > lv).sum())
         except Exception:
             novas_n = 0
-    # Marca visita atual (após calcular as novas)
     set_meta("cvm_last_visit", _brt_date().strftime("%Y-%m-%d"))
 
     # ── Filtros ────────────────────────────────────────────────
@@ -5994,11 +6310,17 @@ def render_cvm():
     # ── KPIs ───────────────────────────────────────────────────
     vol_total = fdf_kpi["Valor_Total_Registrado"].sum() if "Valor_Total_Registrado" in fdf_kpi.columns else 0
     n_ofertas = len(fdf_kpi)
-    n_book = int((fdf_kpi["Status_Requerimento"] == "Aguardando Bookbuilding").sum()) \
-             if "Status_Requerimento" in fdf_kpi.columns else 0
-    n_vivo = int(fdf_kpi["Status_Requerimento"].isin(
-        ["Registro Concedido", "Aguardando Bookbuilding"]).sum()) \
-        if "Status_Requerimento" in fdf_kpi.columns else 0
+
+    # Tipos de dívida (CR = Certificado de Recebíveis → coberto por Securitização).
+    _TIPOS_DIVIDA = {"CRA", "CRI", "Debênture", "NC", "FIDC", "Securitização"}
+    if "Tipo" in fdf_kpi.columns:
+        _div = fdf_kpi[fdf_kpi["Tipo"].isin(_TIPOS_DIVIDA)]
+    else:
+        _div = fdf_kpi.iloc[0:0]
+    n_divida = len(_div)
+    vol_divida = (_div["Valor_Total_Registrado"].sum()
+                  if "Valor_Total_Registrado" in _div.columns else 0)
+    pct_divida = (vol_divida / vol_total * 100.0) if vol_total else None
 
     k1, k2, k3, k4 = st.columns(4)
     k1.markdown(f'<div class="table-card" style="padding:14px 18px;margin-bottom:0">'
@@ -6010,13 +6332,16 @@ def render_cvm():
                 f'<div style="font-size:22px;font-weight:800;color:var(--text1)">{_fmt_bi(vol_total)}</div>'
                 f'</div>', unsafe_allow_html=True)
     k3.markdown(f'<div class="table-card" style="padding:14px 18px;margin-bottom:0">'
-                f'<div class="table-card-meta">Pipeline vivo</div>'
-                f'<div style="font-size:22px;font-weight:800;color:var(--accent)">{n_vivo:,}</div>'
+                f'<div class="table-card-meta">Ofertas de Dívida no período</div>'
+                f'<div style="font-size:22px;font-weight:800;color:var(--accent)">{n_divida:,}</div>'
                 f'</div>', unsafe_allow_html=True)
-    novas_color = "var(--green)" if novas_n else "var(--text3)"
+    _pct_html = (f'<span style="font-size:12px;font-weight:600;color:var(--text3)">'
+                 f'&nbsp;· {pct_divida:.1f}% do total</span>'
+                 if pct_divida is not None else "")
     k4.markdown(f'<div class="table-card" style="padding:14px 18px;margin-bottom:0">'
-                f'<div class="table-card-meta">Novas desde última visita</div>'
-                f'<div style="font-size:22px;font-weight:800;color:{novas_color}">{novas_n:,}</div>'
+                f'<div class="table-card-meta">Volume de Dívidas Registradas</div>'
+                f'<div style="font-size:22px;font-weight:800;color:var(--text1)">'
+                f'{_fmt_bi(vol_divida)}{_pct_html}</div>'
                 f'</div>', unsafe_allow_html=True)
 
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
@@ -6099,8 +6424,17 @@ def render_briefing_credito(anbima_df):
             return None, None, None
         all_ab = pd.concat(frames_ab).sort_values("_abs", ascending=False)
         all_fe = pd.concat(frames_fe).sort_values("_abs", ascending=False)
-        all_ab = all_ab[all_ab["_abs"] >= limiar]
-        all_fe = all_fe[all_fe["_abs"] >= limiar]
+        # Piso de relevância por linha: papéis %CDI (taxa estilo "108% CDI") têm
+        # variação em escala diferente → exigem LIMIAR_PCT_CDI_BPS; CDI+/IPCA+
+        # seguem o limiar normal da mesa.
+        def _piso(df_in):
+            if df_in.empty:
+                return df_in
+            pct = df_in["indexador"].apply(_is_pct_cdi)
+            min_req = pct.map(lambda is_pct: LIMIAR_PCT_CDI_BPS if is_pct else limiar)
+            return df_in[df_in["_abs"] >= min_req]
+        all_ab = _piso(all_ab)
+        all_fe = _piso(all_fe)
         ab = all_ab.head(6)
         fe = all_fe.head(6)
         return (ab, fe), len(all_ab), len(all_fe)
@@ -6277,7 +6611,7 @@ def render_briefing_credito(anbima_df):
                     mid = venda
                 else:
                     mid = None
-                taxa = f"{idx}{fr(mid, 2)}%" if mid is not None else "—"
+                taxa = _fmt_taxa_mover(idx, mid)
                 d    = r["delta"]
                 rows += (
                     f'<div class="briefing-row">'
