@@ -1,0 +1,26 @@
+# ───────── Python ─────────
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# ───────── Ambientes virtuais ─────────
+.venv/
+venv/
+env/
+
+# ───────── Logs e temporários ─────────
+*.log
+
+# ───────── Segredos (NUNCA commitar) ─────────
+# Token do GitHub e afins ficam aqui; o app lê só de st.secrets.
+.streamlit/secrets.toml
+
+# ───────── Sistema operacional ─────────
+.DS_Store
+Thumbs.db
+
+# NÃO ignorar (versionados de propósito):
+#   monitor_macro.db        -> persistido no GitHub (disco do Streamlit Cloud é efêmero)
+#   *.json                  -> estado/config do app (watchlist, news_sources, cartas_lidas, calls)
+#   .streamlit/config.toml  -> tema light + cores

@@ -30,6 +30,8 @@ from datetime import datetime, date, timedelta
 from io import StringIO
 from urllib.parse import urlparse
 
+import destaques_core as dc
+
 try:
     import feedparser as _feedparser
     HAS_FEEDPARSER = True
@@ -1393,6 +1395,7 @@ def render_conteudo_dinamico(current_calls):
     # estruturas permanecem no código; para reativar, reinsira o rótulo na lista
     # abaixo (na posição desejada) e a chamada `with tabs[N]: render_ntnb_anbima(anbima_df, ref_dt)`.
     tabs = st.tabs([
+        "Destaques",
         "Principal",
         "Primário CVM",
         "Crédito",
@@ -1405,21 +1408,188 @@ def render_conteudo_dinamico(current_calls):
         "FRA",
         "Ferramentas",
     ])
-    with tabs[0]: render_principal(di_data, anbima_df, current_calls, ajuste_locked, prev_bday_ajuste)
-    with tabs[1]: render_cvm()
-    with tabs[2]: render_credito(anbima_df)
-    with tabs[3]: render_ativos()
-    with tabs[4]: render_noticias()
-    with tabs[5]: render_newsletters()
-    with tabs[7]: render_runs(anbima_df)
-    with tabs[8]: render_calls(anbima_df, current_calls, save_calls)
-    with tabs[9]: render_curva_di(di_data)
-    with tabs[10]: render_ferramentas(di_data, anbima_df)
+    with tabs[0]: render_destaques(di_data, anbima_df)
+    with tabs[1]: render_principal(di_data, anbima_df, current_calls, ajuste_locked, prev_bday_ajuste)
+    with tabs[2]: render_cvm()
+    with tabs[3]: render_credito(anbima_df)
+    with tabs[4]: render_ativos()
+    with tabs[5]: render_noticias()
+    with tabs[6]: render_newsletters()
+    with tabs[8]: render_runs(anbima_df)
+    with tabs[9]: render_calls(anbima_df, current_calls, save_calls)
+    with tabs[10]: render_curva_di(di_data)
+    with tabs[11]: render_ferramentas(di_data, anbima_df)
 
 
 # ================================================================
 # ABAS DE CONTEUDO
 # ================================================================
+
+def render_destaques(di_data, anbima_df):
+    """Aba 'Destaques do Dia' — consolida e ranqueia os sinais relevantes do dia
+    (ações em movimento, comunicados, juros, spreads, ofertas SRE), reusando os
+    fetches já cacheados. A seleção/ranqueamento fica em destaques_core (testável);
+    aqui só orquestra e renderiza. Cada seção é isolada em try/except."""
+    st.markdown('<p class="mon-head">Destaques do Dia</p>', unsafe_allow_html=True)
+    limiar_bps = st.session_state.get("limiar_bps", LIMIAR_BPS_DEFAULT)
+    st.caption(f"O que se moveu hoje · limiar ações 2,0% · spreads ≥ {limiar_bps} bps · "
+               "fontes ao vivo (B3, ANBIMA, CVM, yfinance)")
+
+    wl = st.session_state.get("watchlist") or _load_watchlist()
+
+    def _dd(d):
+        try:
+            return d.strftime("%d/%m")
+        except Exception:
+            return "—"
+
+    def _card(icone, titulo, linhas):
+        corpo = linhas or ('<div class="briefing-row"><span class="nm" '
+                           'style="color:var(--text3)">sem destaques hoje</span></div>')
+        st.markdown(f'<div class="briefing-card"><h4>{icone} {titulo}</h4>{corpo}</div>',
+                    unsafe_allow_html=True)
+
+    def _erro(icone, titulo, e):
+        _card(icone, titulo,
+              f'<div class="briefing-row"><span class="nm" '
+              f'style="color:var(--text3);font-size:11px">fonte indisponível ({e})</span></div>')
+
+    # 1) Ações em movimento (watchlist BR + INT, |Δ%| >= 2%)
+    try:
+        quotes = []
+        for a in wl:
+            if a.get("group") not in ("BR", "INT"):
+                continue
+            q, err = _quote_for_asset(a)
+            if err or not q:
+                continue
+            quotes.append({"name": a.get("name", ""), "ticker": a.get("ticker", ""),
+                           "group": a.get("group", ""), "price": q.get("price"),
+                           "prev": q.get("prev")})
+        linhas = ""
+        for it in dc.destaques_acoes(quotes, 2.0):
+            tk = str(it["titulo"]).replace(".SA", "")
+            linhas += (f'<div class="briefing-row"><span class="nm"><b>{tk}</b> '
+                       f'<span style="color:var(--text3);font-size:11px">{it["detalhe"]}</span></span>'
+                       f'<span class="dl">{fr(it["valor"], 2)} &nbsp; {fd2(it["delta"], 2, "%")}</span></div>')
+        _card("📈", "Ações em movimento", linhas)
+    except Exception as e:
+        _erro("📈", "Ações em movimento", e)
+
+    # 2) Comunicados & Fatos Relevantes (Plantão B3, alto sinal)
+    try:
+        hoje = _brt_date()
+        di_str = (hoje - timedelta(days=3)).strftime("%Y-%m-%d")
+        df_str = hoje.strftime("%Y-%m-%d")
+        itens = []
+        for a in wl:
+            if a.get("group") != "BR":
+                continue
+            code = _b3_code_from_ticker(a.get("ticker", ""))
+            its, err = _fetch_b3_plantao(code, di_str, df_str)
+            if err or not its:
+                continue
+            for it in its:
+                itens.append({"empresa": a.get("name", ""), "ticker": code,
+                              "data": it.get("data"), "desc": it.get("desc", ""),
+                              "link": it.get("link")})
+        linhas = ""
+        for it in dc.destaques_comunicados(itens):
+            link = it.get("link") or "#"
+            linhas += (f'<div class="briefing-row"><span class="nm">'
+                       f'<span style="color:var(--text3)">{_dd(it["data"])}</span>&nbsp;'
+                       f'<b>{it["titulo"]}</b> · '
+                       f'<a href="{link}" target="_blank" style="color:var(--accent)">{it["detalhe"]}</a>'
+                       f'</span></div>')
+        _card("📣", "Comunicados &amp; Fatos Relevantes", linhas)
+    except Exception as e:
+        _erro("📣", "Comunicados &amp; Fatos Relevantes", e)
+
+    # 3) Maiores movimentos de juros (DI + NTN-B, por |Δ bps|)
+    try:
+        serie_hoje, serie_prev = {}, {}
+        di_prev = get_prev_bday_ajuste() or {}
+        for tk, info in ((di_data or {}).get("tickers") or {}).items():
+            rot = f"DI {info.get('vencimento') or tk}"
+            serie_hoje[rot] = info.get("ajuste") or info.get("ultimo")
+            if tk in di_prev:
+                serie_prev[rot] = di_prev[tk]
+        ap = load_anbima_prev()
+        prev_map = dict(zip(ap["label"], ap["tx_ind_prev"])) if (ap is not None and not ap.empty) else {}
+        if anbima_df is not None and not anbima_df.empty:
+            for _, r in anbima_df.iterrows():
+                lab = r.get("label")
+                serie_hoje[lab] = r.get("tx_ind")
+                if lab in prev_map:
+                    serie_prev[lab] = prev_map[lab]
+        linhas = ""
+        for it in dc.destaques_juros(serie_hoje, serie_prev, top_n=6):
+            linhas += (f'<div class="briefing-row"><span class="nm">{it["titulo"]}</span>'
+                       f'<span class="dl">{fr(it["valor"], 2)}% &nbsp; {fd(round(it["delta"]))} bps</span></div>')
+        _card("📊", "Maiores movimentos de juros", linhas)
+    except Exception as e:
+        _erro("📊", "Maiores movimentos de juros", e)
+
+    # 4) Spreads de crédito abrindo/fechando (top movers dos runs)
+    try:
+        regs = []
+        for rt in ("CDI", "IPCA", "LF"):
+            mv = _compute_top_movers(rt)
+            if not mv:
+                continue
+            for key in ("abertura", "fechamento"):
+                df_mv = mv.get(key)
+                if df_mv is None or getattr(df_mv, "empty", True):
+                    continue
+                for _, r in df_mv.iterrows():
+                    regs.append({"run_type": rt, "emissor": r.get("emissor", ""),
+                                 "ativo": r.get("ativo", ""), "delta": r.get("delta")})
+        linhas = ""
+        for it in dc.destaques_spreads(regs, limiar_bps)[:8]:
+            linhas += (f'<div class="briefing-row"><span class="nm"><b>{it["titulo"]}</b> '
+                       f'<span style="color:var(--text3);font-size:11px">{it["detalhe"]}</span></span>'
+                       f'<span class="dl">{fd(round(it["delta"]))} bps</span></div>')
+        _card("↔️", "Spreads de crédito · abrindo / fechando", linhas)
+    except Exception as e:
+        _erro("↔️", "Spreads de crédito · abrindo / fechando", e)
+
+    # 5) Novidades no primário (SRE) — novas ofertas na janela D-1 -> D0
+    try:
+        df_sre, err = fetch_cvm_sre()
+        linhas = ""
+        if not err and df_sre is not None and not df_sre.empty:
+            hoje = _brt_date()
+            d0 = hoje if is_bday(hoje) else _target_date_n_du_back(hoje + timedelta(days=1), 1)
+            d1 = _target_date_n_du_back(d0, 1)
+            date_col = _find_col(df_sre, "Data_requerimento")
+            emis_col = _find_col(df_sre, "Nome_Emissor")
+            tipo_col = _find_col(df_sre, "Tipo")
+            vol_col = _find_col(df_sre, "Valor_Total_Registrado")
+            num_col = _find_col(df_sre, "Numero_Requerimento")
+            ofertas = []
+            if date_col and emis_col:
+                for _, r in df_sre.iterrows():
+                    dval = r.get(date_col)
+                    dt = dval.date() if hasattr(dval, "date") else dval
+                    ofertas.append({"emissor": str(r.get(emis_col, "")),
+                                    "tipo": str(r.get(tipo_col, "")) if tipo_col else "",
+                                    "volume": r.get(vol_col) if vol_col else None,
+                                    "data": dt,
+                                    "link": dc.sre_oferta_url(r.get(num_col)) if num_col else None})
+            for it in dc.destaques_sre(ofertas, d1, d0):
+                v = it.get("valor")
+                vtxt = f"R$ {v/1e6:.0f}M" if v else "—"
+                seta = (f'&nbsp;<a href="{it["link"]}" target="_blank" title="Abrir no SRE da CVM" '
+                        f'style="color:var(--text3);text-decoration:none">↗</a>') if it.get("link") else ""
+                linhas += (f'<div class="briefing-row"><span class="nm">'
+                           f'<span style="color:var(--text3)">{_dd(it["data"])}</span>&nbsp;'
+                           f'<b>{it["titulo"]}</b> '
+                           f'<span style="color:var(--text3);font-size:11px">{it["detalhe"]}</span></span>'
+                           f'<span class="dl">{vtxt}{seta}</span></div>')
+        _card("🏦", "Novidades no primário (SRE)", linhas)
+    except Exception as e:
+        _erro("🏦", "Novidades no primário (SRE)", e)
+
 
 def render_principal(di, anbima, calls, ajuste_locked, prev_bday_ajuste=None):
     frozen = hora_brt() >= 16.0
@@ -2250,6 +2420,7 @@ def _ferr_busca_cvm():
     dev_col = _find_col(res, "Identificacao_devedores_coobrigados")
     lider_col = _find_col(res, "Nome_Lider")
     vol_col = _find_col(res, "Valor_Total_Registrado")
+    num_col = _find_col(res, "Numero_Requerimento")
     out = []
     for _, r in res.head(60).iterrows():
         out.append({
@@ -2260,8 +2431,11 @@ def _ferr_busca_cvm():
             "Devedor": str(r.get(dev_col, "—"))[:40] if dev_col else "—",
             "Líder": str(r.get(lider_col, "—"))[:30] if lider_col else "—",
             "Volume": _fmt_bi(r.get(vol_col)) if vol_col else "—",
+            "Oferta": dc.sre_oferta_url(r.get(num_col)) if num_col else None,
         })
-    st.dataframe(pd.DataFrame(out), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(out), use_container_width=True, hide_index=True,
+                 column_config={"Oferta": st.column_config.LinkColumn(
+                     "Oferta", display_text="abrir ↗", width="small")})
 
 
 def _ferr_busca_runs():
@@ -6327,6 +6501,10 @@ def render_cvm():
     show_cols = [c for c in sel_cols if c in fdf_sorted.columns] if sel_cols else list(fdf_sorted.columns)
     detail = fdf_sorted[show_cols].copy() if show_cols else fdf_sorted.copy()
 
+    _num_c = _find_col(fdf_sorted, "Numero_Requerimento")
+    if _num_c and _num_c in fdf_sorted.columns:
+        detail["Oferta"] = fdf_sorted[_num_c].map(dc.sre_oferta_url)
+
     val_c = _find_col(detail, "Valor_Total_Registrado")
     fmt_map = {}
     if val_c and val_c in detail.columns:
@@ -6339,8 +6517,11 @@ def render_cvm():
     styled = detail.style.format(fmt_map, na_rep="—") if fmt_map else detail
 
     st.caption(f"{len(detail):,} ofertas · ordenadas por data (mais recente primeiro)")
+    _cfg = _autosize_config(detail)
+    if "Oferta" in detail.columns:
+        _cfg["Oferta"] = st.column_config.LinkColumn("Oferta", display_text="abrir ↗", width="small")
     st.dataframe(styled, use_container_width=True, hide_index=True, height=460,
-                 column_config=_autosize_config(detail))
+                 column_config=_cfg)
 
     csv_bytes = detail.to_csv(index=False, sep=";", encoding="utf-8-sig").encode()
     st.download_button("Baixar filtrado (.csv)", csv_bytes,
@@ -6467,6 +6648,7 @@ def render_briefing_credito(anbima_df):
         emis_col = _find_col(df_sre, "Nome_Emissor")
         dev_col  = _find_col(df_sre, "Identificacao_devedores_coobrigados")
         vol_col  = _find_col(df_sre, "Valor_Total_Registrado")
+        num_col  = _find_col(df_sre, "Numero_Requerimento")
 
         # D-1 (1 dia útil antes) até D0, respeitando feriados (calendário ANBIMA)
         _hoje = _brt_date()
@@ -6501,11 +6683,14 @@ def render_briefing_credito(anbima_df):
                     emissor = dev_val[:40]
             vol_raw = r.get(vol_col) if vol_col else None
             vol_txt = (f"R$ {vol_raw/1e6:.0f}M" if pd.notna(vol_raw) and vol_raw else "—")
+            _link = dc.sre_oferta_url(r.get(num_col)) if num_col else None
+            _seta = (f'&nbsp;<a href="{_link}" target="_blank" title="Abrir no SRE da CVM" '
+                     f'style="color:var(--text3);text-decoration:none">↗</a>') if _link else ""
             return (
                 f'<div class="briefing-row">'
                 f'<span class="nm">{emissor}</span>'
                 f'<span class="dl">'
-                f'<span class="cr-chip fl">{tipo}</span>&nbsp;{vol_txt}'
+                f'<span class="cr-chip fl">{tipo}</span>&nbsp;{vol_txt}{_seta}'
                 f'</span>'
                 f'</div>'
             )
