@@ -2344,6 +2344,65 @@ def _ferr_busca_runs():
                "Runs antigos sem spread gravado têm o SOB recalculado on-the-fly.")
 
 
+def _diag_ipe_painel():
+    """Painel TEMPORÁRIO de diagnóstico do IPE da CVM.
+    Mostra colunas reais, categorias e como os ativos BR aparecem no arquivo.
+    Pode ser removido depois que o feed estiver ajustado."""
+    with st.expander("🔧 Diagnóstico do IPE (temporário)", expanded=False):
+        st.caption("Use para conferir a estrutura real do arquivo da CVM e os "
+                   "Codigo_CVM dos seus ativos. Cole a saída no chat.")
+        if not st.button("Rodar diagnóstico", key="diag_ipe_btn"):
+            return
+        with st.spinner("Baixando IPE da CVM…"):
+            df, err = _fetch_cvm_ipe()
+        if err or df is None or df.empty:
+            st.error(f"Falha: {err or 'arquivo vazio'}")
+            return
+
+        out = []
+        out.append("== 1) COLUNAS ==")
+        out.append(str(list(df.columns)))
+
+        cat_col = next((c for c in df.columns if c.lower() == "categoria"), None)
+        out.append("\n== 2) Categoria (top 30) ==")
+        out.append(f"coluna: {cat_col}")
+        if cat_col:
+            out.append(df[cat_col].value_counts().head(30).to_string())
+
+        nome_col = next((c for c in df.columns if c.lower() in
+                         ("nome_companhia", "nome_companhia_b3", "denom_social")), None)
+        cod_col = next((c for c in df.columns if c.lower() == "codigo_cvm"), None)
+        out.append("\n== 3) Linhas de ABC Brasil / BB Seguridade ==")
+        out.append(f"coluna nome: {nome_col} | coluna codigo: {cod_col}")
+        if nome_col:
+            mask = df[nome_col].str.contains("ABC BRASIL|SEGURID",
+                                             case=False, na=False)
+            cols_show = [c for c in df.columns if c.lower() in
+                         ("nome_companhia", "codigo_cvm", "categoria",
+                          "data_referencia", "data_entrega")]
+            out.append(f"linhas: {int(mask.sum())}")
+            out.append(df[mask][cols_show].head(12).to_string(index=False))
+
+        out.append("\n== 4) Codigo_CVM dos ativos da watchlist ==")
+        if nome_col and cod_col:
+            termos = ["ABC", "SEGURID", "TAESA", "TRANSMISSORA ALIAN", "ITAU",
+                      "CPFL", "SANTANDER", "ISA ", "CTEEP", "BR PARTNERS", "BRBI",
+                      "ENERGIA BRASIL"]
+            vistos = set()
+            linhas = []
+            for t in termos:
+                sub = df[df[nome_col].str.contains(t, case=False, na=False)]
+                for _, rr in sub[[nome_col, cod_col]].drop_duplicates().iterrows():
+                    chave = (rr[nome_col], rr[cod_col])
+                    if chave in vistos:
+                        continue
+                    vistos.add(chave)
+                    linhas.append(f"  {str(rr[cod_col]):>8}  {rr[nome_col]}")
+            out.append("\n".join(linhas) if linhas else "  (nada encontrado)")
+
+        st.code("\n".join(out), language="text")
+
+
 def render_feed_comunicados():
     """Feed de comunicados CVM (IPE) das Ações BR da watchlist.
     Renderizado no fim da aba Ativos."""
@@ -2362,13 +2421,23 @@ def render_feed_comunicados():
         if st.button("Atualizar feed", key="cvm_feed_btn", use_container_width=True):
             st.session_state["cvm_feed_run"] = True
 
+    so_principais = st.checkbox(
+        "Apenas Fato Relevante / Comunicado ao Mercado / Aviso aos Acionistas",
+        value=True, key="cvm_feed_so_principais",
+        help="Desmarque para incluir todas as categorias do IPE (ofertas, "
+             "calendário de eventos, dados econômico-financeiros etc.).")
+
+    _diag_ipe_painel()  # painel temporário de diagnóstico (pode remover depois)
+
     if not st.session_state.get("cvm_feed_run"):
         st.caption("Clique em “Atualizar feed” para carregar os comunicados.")
         return
 
     wl = st.session_state.get("watchlist") or _load_watchlist()
-    nomes_br = [a.get("name", "") for a in wl if a.get("group") == "BR"]
-    if not nomes_br:
+    ativos_br = [{"name": a.get("name", ""), "cvm": a.get("cvm", "")}
+                 for a in wl if a.get("group") == "BR"]
+    nomes_br = [a["name"] for a in ativos_br]
+    if not ativos_br:
         st.info("Nenhuma ação BR na watchlist.")
         return
 
@@ -2378,7 +2447,8 @@ def render_feed_comunicados():
         st.error(f"Falha ao obter dados da CVM: {err}")
         return
 
-    res = _filtrar_ipe_por_empresas(df_ipe, nomes_br, n_dias)
+    res = _filtrar_ipe_por_empresas(df_ipe, ativos_br, n_dias,
+                                    somente_principais=so_principais)
     if res.empty:
         st.info(f"Nenhum comunicado nos últimos {n_dias} dias para as empresas da watchlist.")
         return
@@ -2457,17 +2527,31 @@ def _norm_txt(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def _filtrar_ipe_por_empresas(df, nomes_empresas, n_dias):
+def _filtrar_ipe_por_empresas(df, nomes_empresas, n_dias, somente_principais=True):
     """Filtra o IPE pelas empresas (match aproximado por nome) e janela de dias.
-    Adiciona colunas auxiliares _data (datetime) e _match (nome da watchlist)."""
+    Adiciona colunas auxiliares _data (datetime) e _match (nome da watchlist).
+
+    A data usada para a janela é a DATA DE ENTREGA (quando o documento foi
+    protocolado/divulgado à CVM) — é ela que reflete "saiu ontem". A
+    Data_Referencia pode ser bem anterior (ex.: aviso aos acionistas com data
+    de referência do exercício passado) e faria comunicados recém-divulgados
+    caírem fora da janela. Só usa Data_Referencia como fallback.
+
+    somente_principais=True restringe às categorias do feed (Fato Relevante,
+    Comunicado ao Mercado, Aviso aos Acionistas). False mostra todas.
+    """
     if df is None or df.empty:
         return pd.DataFrame()
 
     col_nome = next((c for c in df.columns if c.lower() in
                      ("nome_companhia", "nome_companhia_b3", "denom_social")), None)
     col_cat = next((c for c in df.columns if c.lower() == "categoria"), None)
-    col_data = next((c for c in df.columns if c.lower() in
-                     ("data_entrega", "data_referencia")), None)
+    # Preferência EXPLÍCITA: data de entrega primeiro, depois data de referência.
+    # (next() sobre df.columns seguiria a ordem das colunas no arquivo, que põe
+    #  Data_Referencia antes de Data_Entrega — daí a escolha errada.)
+    _cols_lower = {c.lower(): c for c in df.columns}
+    col_data = (_cols_lower.get("data_entrega")
+                or _cols_lower.get("data_referencia"))
     if not (col_nome and col_data):
         return pd.DataFrame()
 
@@ -2476,27 +2560,59 @@ def _filtrar_ipe_por_empresas(df, nomes_empresas, n_dias):
     corte = pd.Timestamp(_brt_date()) - pd.Timedelta(days=n_dias)
     work = work[work["_data"] >= corte]
 
-    # filtra categorias relevantes (se a coluna existir)
-    if col_cat:
+    # filtra categorias relevantes (se a coluna existir e o usuário pediu)
+    if col_cat and somente_principais:
         work = work[work[col_cat].astype(str).str.lower().str.strip()
                     .isin(_IPE_CATEGORIAS_FEED)]
     if work.empty:
         return pd.DataFrame()
 
+    # ── Casamento ───────────────────────────────────────────────
+    # Estratégia em camadas, da mais confiável para a mais frouxa:
+    #  1) Codigo_CVM (se o ativo tiver 'cvm' cadastrado) — exato e estável.
+    #  2) Token-set: TODOS os tokens significativos do nome da watchlist
+    #     presentes no nome da CVM (cobre "ABC Brasil" ⊂ "BANCO ABC BRASIL").
+    #  3) Fallback: substring do alvo inteiro ou do primeiro token (>=4 ch).
     work["_nome_norm"] = work[col_nome].apply(_norm_txt)
-    alvos = {nome: _norm_txt(nome) for nome in nomes_empresas}
 
-    def _match_row(nome_norm):
-        for nome_orig, alvo in alvos.items():
-            if not alvo:
+    col_codcvm = next((c for c in df.columns if c.lower() == "codigo_cvm"), None)
+    if col_codcvm:
+        work["_codcvm"] = (work[col_codcvm].astype(str)
+                           .str.strip().str.lstrip("0"))
+
+    # nomes_empresas pode ser lista de strings (compat) ou de dicts {name, cvm}
+    alvos = []   # (rotulo, nome_norm, tokens, cod_cvm)
+    _STOP = {"DE", "DA", "DO", "DAS", "DOS", "E", "BANCO", "BRASIL", "BR"}
+    for item in nomes_empresas:
+        if isinstance(item, dict):
+            rotulo = item.get("name", "")
+            cod = str(item.get("cvm", "") or "").strip().lstrip("0")
+        else:
+            rotulo, cod = item, ""
+        nn = _norm_txt(rotulo)
+        toks = {t for t in nn.split(" ") if len(t) >= 3 and t not in _STOP}
+        alvos.append((rotulo, nn, toks, cod))
+
+    def _match_row(row):
+        nome_norm = row["_nome_norm"]
+        cod_row = row.get("_codcvm", "") if col_codcvm else ""
+        for rotulo, nn, toks, cod in alvos:
+            if not nn:
                 continue
-            primeiro = alvo.split(" ")[0]
-            if alvo in nome_norm or nome_norm in alvo or \
+            # 1) código CVM
+            if cod and cod_row and cod == cod_row:
+                return rotulo
+            # 2) token-set: todos os tokens significativos presentes
+            if toks and all(t in nome_norm for t in toks):
+                return rotulo
+            # 3) fallback substring
+            primeiro = nn.split(" ")[0]
+            if nn in nome_norm or nome_norm in nn or \
                (len(primeiro) >= 4 and primeiro in nome_norm):
-                return nome_orig
+                return rotulo
         return None
 
-    work["_match"] = work["_nome_norm"].apply(_match_row)
+    work["_match"] = work.apply(_match_row, axis=1)
     work = work[work["_match"].notna()]
     if work.empty:
         return pd.DataFrame()
@@ -4383,14 +4499,14 @@ def render_newsletters():
 WATCHLIST_FILE = "watchlist.json"
 
 _DEFAULT_WATCHLIST = [
-    {"ticker": "TAEE11.SA", "name": "Taesa",           "group": "BR"},
-    {"ticker": "ISAE4.SA",  "name": "Isa Cteep",       "group": "BR"},
-    {"ticker": "BBSE3.SA",  "name": "BB Seguridade",   "group": "BR"},
-    {"ticker": "ITUB4.SA",  "name": "Itaú Unibanco",   "group": "BR"},
-    {"ticker": "SANB11.SA", "name": "Santander BR",    "group": "BR"},
-    {"ticker": "BRBI11.SA", "name": "BR Advisory",     "group": "BR"},
-    {"ticker": "ABCB4.SA",  "name": "ABC Brasil",      "group": "BR"},
-    {"ticker": "CPFE3.SA",  "name": "CPFL Energia",    "group": "BR"},
+    {"ticker": "TAEE11.SA", "name": "Taesa",           "group": "BR", "cvm": ""},
+    {"ticker": "ISAE4.SA",  "name": "Isa Cteep",       "group": "BR", "cvm": ""},
+    {"ticker": "BBSE3.SA",  "name": "BB Seguridade",   "group": "BR", "cvm": ""},
+    {"ticker": "ITUB4.SA",  "name": "Itaú Unibanco",   "group": "BR", "cvm": ""},
+    {"ticker": "SANB11.SA", "name": "Santander BR",    "group": "BR", "cvm": ""},
+    {"ticker": "BRBI11.SA", "name": "BR Advisory",     "group": "BR", "cvm": ""},
+    {"ticker": "ABCB4.SA",  "name": "ABC Brasil",      "group": "BR", "cvm": ""},
+    {"ticker": "CPFE3.SA",  "name": "CPFL Energia",    "group": "BR", "cvm": ""},
     {"ticker": "IND",       "name": "Ibov Futuro",     "group": "FUTURES"},
     {"ticker": "USDBRL=X",  "name": "Dólar Comercial", "group": "INT"},
     {"ticker": "^GSPC",     "name": "S&P 500",         "group": "INT"},
@@ -6582,8 +6698,7 @@ def render_briefing_credito(anbima_df):
         # Pipeline por segmento (mantém para a síntese)
         pipeline = _sre_pipeline_por_segmento(df_sre)
 
-        rows_html = ""
-        for _, r in novas.head(7).iterrows():
+        def _sre_row(r):
             emissor = (str(r[emis_col]) if emis_col and pd.notna(r.get(emis_col)) else "—")[:40]
             tipo    = str(r[tipo_col]) if tipo_col and pd.notna(r.get(tipo_col)) else "—"
             # Para CRI/CRA/CR mostra o devedor no lugar do emissor (securitizadora)
@@ -6595,7 +6710,7 @@ def render_briefing_credito(anbima_df):
                     emissor = dev_val[:40]
             vol_raw = r.get(vol_col) if vol_col else None
             vol_txt = (f"R$ {vol_raw/1e6:.0f}M" if pd.notna(vol_raw) and vol_raw else "—")
-            rows_html += (
+            return (
                 f'<div class="briefing-row">'
                 f'<span class="nm">{emissor}</span>'
                 f'<span class="dl">'
@@ -6603,8 +6718,22 @@ def render_briefing_credito(anbima_df):
                 f'</span>'
                 f'</div>'
             )
-        if not rows_html:
+
+        # Até 14 ofertas em duas colunas (no máx. 7 por coluna)
+        novas14 = novas.head(14)
+        col_esq = "".join(_sre_row(r) for _, r in novas14.iloc[:7].iterrows())
+        col_dir = "".join(_sre_row(r) for _, r in novas14.iloc[7:14].iterrows())
+        if not col_esq and not col_dir:
             rows_html = '<span style="color:var(--text3);font-size:12px">sem ofertas no período</span>'
+        elif not col_dir:
+            rows_html = col_esq
+        else:
+            rows_html = (
+                f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'
+                f'<div>{col_esq}</div>'
+                f'<div>{col_dir}</div>'
+                f'</div>'
+            )
 
         return rows_html, pipeline, None, data_txt
 
