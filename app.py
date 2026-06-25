@@ -2344,65 +2344,6 @@ def _ferr_busca_runs():
                "Runs antigos sem spread gravado têm o SOB recalculado on-the-fly.")
 
 
-def _diag_ipe_painel():
-    """Painel TEMPORÁRIO de diagnóstico do IPE da CVM.
-    Mostra colunas reais, categorias e como os ativos BR aparecem no arquivo.
-    Pode ser removido depois que o feed estiver ajustado."""
-    with st.expander("🔧 Diagnóstico do IPE (temporário)", expanded=False):
-        st.caption("Use para conferir a estrutura real do arquivo da CVM e os "
-                   "Codigo_CVM dos seus ativos. Cole a saída no chat.")
-        if not st.button("Rodar diagnóstico", key="diag_ipe_btn"):
-            return
-        with st.spinner("Baixando IPE da CVM…"):
-            df, err = _fetch_cvm_ipe()
-        if err or df is None or df.empty:
-            st.error(f"Falha: {err or 'arquivo vazio'}")
-            return
-
-        out = []
-        out.append("== 1) COLUNAS ==")
-        out.append(str(list(df.columns)))
-
-        cat_col = next((c for c in df.columns if c.lower() == "categoria"), None)
-        out.append("\n== 2) Categoria (top 30) ==")
-        out.append(f"coluna: {cat_col}")
-        if cat_col:
-            out.append(df[cat_col].value_counts().head(30).to_string())
-
-        nome_col = next((c for c in df.columns if c.lower() in
-                         ("nome_companhia", "nome_companhia_b3", "denom_social")), None)
-        cod_col = next((c for c in df.columns if c.lower() == "codigo_cvm"), None)
-        out.append("\n== 3) Linhas de ABC Brasil / BB Seguridade ==")
-        out.append(f"coluna nome: {nome_col} | coluna codigo: {cod_col}")
-        if nome_col:
-            mask = df[nome_col].str.contains("ABC BRASIL|SEGURID",
-                                             case=False, na=False)
-            cols_show = [c for c in df.columns if c.lower() in
-                         ("nome_companhia", "codigo_cvm", "categoria",
-                          "data_referencia", "data_entrega")]
-            out.append(f"linhas: {int(mask.sum())}")
-            out.append(df[mask][cols_show].head(12).to_string(index=False))
-
-        out.append("\n== 4) Codigo_CVM dos ativos da watchlist ==")
-        if nome_col and cod_col:
-            termos = ["ABC", "SEGURID", "TAESA", "TRANSMISSORA ALIAN", "ITAU",
-                      "CPFL", "SANTANDER", "ISA ", "CTEEP", "BR PARTNERS", "BRBI",
-                      "ENERGIA BRASIL"]
-            vistos = set()
-            linhas = []
-            for t in termos:
-                sub = df[df[nome_col].str.contains(t, case=False, na=False)]
-                for _, rr in sub[[nome_col, cod_col]].drop_duplicates().iterrows():
-                    chave = (rr[nome_col], rr[cod_col])
-                    if chave in vistos:
-                        continue
-                    vistos.add(chave)
-                    linhas.append(f"  {str(rr[cod_col]):>8}  {rr[nome_col]}")
-            out.append("\n".join(linhas) if linhas else "  (nada encontrado)")
-
-        st.code("\n".join(out), language="text")
-
-
 def render_feed_comunicados():
     """Feed de comunicados CVM (IPE) das Ações BR da watchlist.
     Renderizado no fim da aba Ativos."""
@@ -2420,14 +2361,6 @@ def render_feed_comunicados():
     with col_b:
         if st.button("Atualizar feed", key="cvm_feed_btn", use_container_width=True):
             st.session_state["cvm_feed_run"] = True
-
-    so_principais = st.checkbox(
-        "Apenas Fato Relevante / Comunicado ao Mercado / Aviso aos Acionistas",
-        value=True, key="cvm_feed_so_principais",
-        help="Desmarque para incluir todas as categorias do IPE (ofertas, "
-             "calendário de eventos, dados econômico-financeiros etc.).")
-
-    _diag_ipe_painel()  # painel temporário de diagnóstico (pode remover depois)
 
     if not st.session_state.get("cvm_feed_run"):
         st.caption("Clique em “Atualizar feed” para carregar os comunicados.")
@@ -2447,8 +2380,9 @@ def render_feed_comunicados():
         st.error(f"Falha ao obter dados da CVM: {err}")
         return
 
+    # Traz TODAS as categorias do IPE (sem filtro) — preferência do Bruno.
     res = _filtrar_ipe_por_empresas(df_ipe, ativos_br, n_dias,
-                                    somente_principais=so_principais)
+                                    somente_principais=False)
     if res.empty:
         st.info(f"Nenhum comunicado nos últimos {n_dias} dias para as empresas da watchlist.")
         return
@@ -2568,11 +2502,9 @@ def _filtrar_ipe_por_empresas(df, nomes_empresas, n_dias, somente_principais=Tru
         return pd.DataFrame()
 
     # ── Casamento ───────────────────────────────────────────────
-    # Estratégia em camadas, da mais confiável para a mais frouxa:
-    #  1) Codigo_CVM (se o ativo tiver 'cvm' cadastrado) — exato e estável.
-    #  2) Token-set: TODOS os tokens significativos do nome da watchlist
-    #     presentes no nome da CVM (cobre "ABC Brasil" ⊂ "BANCO ABC BRASIL").
-    #  3) Fallback: substring do alvo inteiro ou do primeiro token (>=4 ch).
+    # Se o ativo tem 'cvm' cadastrado → casa SÓ por Codigo_CVM (exato, estável,
+    # sem falsos positivos). Se não tem → cai para nome: token-set (todos os
+    # tokens significativos presentes) e depois substring do nome/primeiro token.
     work["_nome_norm"] = work[col_nome].apply(_norm_txt)
 
     col_codcvm = next((c for c in df.columns if c.lower() == "codigo_cvm"), None)
@@ -2599,13 +2531,16 @@ def _filtrar_ipe_por_empresas(df, nomes_empresas, n_dias, somente_principais=Tru
         for rotulo, nn, toks, cod in alvos:
             if not nn:
                 continue
-            # 1) código CVM
-            if cod and cod_row and cod == cod_row:
-                return rotulo
-            # 2) token-set: todos os tokens significativos presentes
+            if cod:
+                # Ativo TEM código cadastrado: casa exclusivamente por código.
+                # (Não cai para nome, evitando falsos positivos como
+                #  "Itaú" → ITAUSA/ITAUNENSE ou "CPFL Energia" → subsidiárias.)
+                if cod_row and cod == cod_row:
+                    return rotulo
+                continue
+            # Ativo SEM código: usa nome (token-set + fallback substring).
             if toks and all(t in nome_norm for t in toks):
                 return rotulo
-            # 3) fallback substring
             primeiro = nn.split(" ")[0]
             if nn in nome_norm or nome_norm in nn or \
                (len(primeiro) >= 4 and primeiro in nome_norm):
@@ -4499,14 +4434,14 @@ def render_newsletters():
 WATCHLIST_FILE = "watchlist.json"
 
 _DEFAULT_WATCHLIST = [
-    {"ticker": "TAEE11.SA", "name": "Taesa",           "group": "BR", "cvm": ""},
-    {"ticker": "ISAE4.SA",  "name": "Isa Cteep",       "group": "BR", "cvm": ""},
-    {"ticker": "BBSE3.SA",  "name": "BB Seguridade",   "group": "BR", "cvm": ""},
-    {"ticker": "ITUB4.SA",  "name": "Itaú Unibanco",   "group": "BR", "cvm": ""},
-    {"ticker": "SANB11.SA", "name": "Santander BR",    "group": "BR", "cvm": ""},
-    {"ticker": "BRBI11.SA", "name": "BR Advisory",     "group": "BR", "cvm": ""},
-    {"ticker": "ABCB4.SA",  "name": "ABC Brasil",      "group": "BR", "cvm": ""},
-    {"ticker": "CPFE3.SA",  "name": "CPFL Energia",    "group": "BR", "cvm": ""},
+    {"ticker": "TAEE11.SA", "name": "Taesa",           "group": "BR", "cvm": "20257"},
+    {"ticker": "ISAE4.SA",  "name": "Isa Cteep",       "group": "BR", "cvm": "18376"},
+    {"ticker": "BBSE3.SA",  "name": "BB Seguridade",   "group": "BR", "cvm": "23159"},
+    {"ticker": "ITUB4.SA",  "name": "Itaú Unibanco",   "group": "BR", "cvm": "19348"},
+    {"ticker": "SANB11.SA", "name": "Santander BR",    "group": "BR", "cvm": "20532"},
+    {"ticker": "BRBI11.SA", "name": "BR Advisory",     "group": "BR", "cvm": "25860"},
+    {"ticker": "ABCB4.SA",  "name": "ABC Brasil",      "group": "BR", "cvm": "20958"},
+    {"ticker": "CPFE3.SA",  "name": "CPFL Energia",    "group": "BR", "cvm": "18660"},
     {"ticker": "IND",       "name": "Ibov Futuro",     "group": "FUTURES"},
     {"ticker": "USDBRL=X",  "name": "Dólar Comercial", "group": "INT"},
     {"ticker": "^GSPC",     "name": "S&P 500",         "group": "INT"},
