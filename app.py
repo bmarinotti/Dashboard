@@ -2345,13 +2345,13 @@ def _ferr_busca_runs():
 
 
 def render_feed_comunicados():
-    """Feed de comunicados CVM (IPE) das Ações BR da watchlist.
-    Renderizado no fim da aba Ativos."""
+    """Feed de comunicados das Ações BR da watchlist, via Plantão de Notícias
+    da B3 (agência 18, tempo real). Renderizado no fim da aba Ativos."""
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     st.markdown('<p class="mon-head">Feed de comunicados — Ações BR</p>',
                 unsafe_allow_html=True)
-    st.caption("Comunicados ao Mercado, Fatos Relevantes e Avisos aos Acionistas das "
-               "empresas da watchlist (grupo BR), via CVM Dados Abertos (IPE).")
+    st.caption("Comunicados, Fatos Relevantes e Avisos aos Acionistas das empresas da "
+               "watchlist (grupo BR), via Plantão de Notícias da B3 (tempo real).")
 
     col_d, col_b = st.columns([2, 1])
     with col_d:
@@ -2367,89 +2367,50 @@ def render_feed_comunicados():
     st.session_state.setdefault("cvm_feed_run", True)
 
     wl = st.session_state.get("watchlist") or _load_watchlist()
-    ativos_br = [{"name": a.get("name", ""), "cvm": a.get("cvm", "")}
-                 for a in wl if a.get("group") == "BR"]
-    nomes_br = [a["name"] for a in ativos_br]
+    ativos_br = [a for a in wl if a.get("group") == "BR"]
     if not ativos_br:
         st.info("Nenhuma ação BR na watchlist.")
         return
 
-    with st.spinner("Baixando base de comunicados da CVM…"):
-        df_ipe, err = _fetch_cvm_ipe()
-    if err:
-        st.error(f"Falha ao obter dados da CVM: {err}")
-        return
+    data_ini = (_brt_date() - timedelta(days=n_dias)).strftime("%Y-%m-%d")
+    data_fim = _brt_date().strftime("%Y-%m-%d")
 
-    # Traz TODAS as categorias do IPE (sem filtro) — preferência do Bruno.
-    res = _filtrar_ipe_por_empresas(df_ipe, ativos_br, n_dias,
-                                    somente_principais=False)
-    if res.empty:
+    blocos = []   # (nome, itens)
+    total = 0
+    with st.spinner("Consultando o Plantão de Notícias da B3…"):
+        for a in ativos_br:
+            nome = a.get("name", "")
+            code = _b3_code_from_ticker(a.get("ticker", ""))
+            itens, err = _fetch_b3_plantao(code, data_ini, data_fim)
+            if err or not itens:
+                continue
+            blocos.append((nome, itens))
+            total += len(itens)
+
+    if total == 0:
         st.info(f"Nenhum comunicado nos últimos {n_dias} dias para as empresas da watchlist.")
         return
 
-    st.caption(f"{len(res)} comunicado(s) · últimos {n_dias} dias · fonte CVM IPE")
-    for nome in nomes_br:
-        grp = res[res["_match"] == nome]
-        if grp.empty:
-            continue
+    st.caption(f"{total} comunicado(s) · últimos {n_dias} dias · fonte B3 Plantão de Notícias")
+    for nome, itens in blocos:
         st.markdown(f"**{nome}**")
         linhas = ""
-        for _, r in grp.iterrows():
-            dt = r["_data"].strftime("%d/%m") if pd.notna(r["_data"]) else "—"
-            cat = str(r.get("Categoria", "") or "")
-            assunto = str(r.get("Assunto", "") or "").strip()
-            if assunto and assunto.lower() != "nan":
-                cat = f"{cat} — {assunto}" if cat else assunto
-            link = str(r.get("Link_Download", "") or "")
-            cat_disp = (cat[:120] + "…") if len(cat) > 120 else cat
-            if link.startswith("http"):
-                linhas += (f'<div class="briefing-row"><span class="nm">'
-                           f'<span style="color:var(--text3)">{dt}</span>&nbsp;'
-                           f'<a href="{link}" target="_blank" '
-                           f'style="color:var(--accent)">{cat_disp}</a></span></div>')
-            else:
-                linhas += (f'<div class="briefing-row"><span class="nm">'
-                           f'<span style="color:var(--text3)">{dt}</span>&nbsp;{cat_disp}'
-                           f'</span></div>')
+        for it in itens:
+            dt = it["data"].strftime("%d/%m") if it["data"] else "—"
+            desc = it["desc"]
+            desc_disp = (desc[:120] + "…") if len(desc) > 120 else desc
+            link = it["link"]
+            linhas += (f'<div class="briefing-row"><span class="nm">'
+                       f'<span style="color:var(--text3)">{dt}</span>&nbsp;'
+                       f'<a href="{link}" target="_blank" '
+                       f'style="color:var(--accent)">{desc_disp}</a></span></div>')
         st.markdown(linhas, unsafe_allow_html=True)
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────
-# 2) FETCH CVM IPE (comunicados/fatos relevantes)
+# Normalizador de texto p/ casamento (usado nas buscas CVM e Runs)
 # ─────────────────────────────────────────
-_CVM_IPE_URL_TMPL = ("https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/IPE/DADOS/"
-                     "ipe_cia_aberta_{ano}.zip")
-
-# Categorias relevantes p/ um feed de "notícias" de ações
-_IPE_CATEGORIAS_FEED = {
-    "fato relevante",
-    "comunicado ao mercado",
-    "aviso aos acionistas",
-}
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def _fetch_cvm_ipe():
-    """Baixa o CSV IPE do ano corrente (CVM Dados Abertos). Retorna (df, err)."""
-    ano = _brt_date().year
-    url = _CVM_IPE_URL_TMPL.format(ano=ano)
-    try:
-        r = requests.get(url, timeout=90, headers={"User-Agent": "Mozilla/5.0"})
-        r.raise_for_status()
-        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-            target = next((n for n in z.namelist() if n.lower().endswith(".csv")), None)
-            if target is None:
-                return None, "Nenhum CSV no ZIP"
-            with z.open(target) as f:
-                df = pd.read_csv(f, encoding="latin-1", sep=";",
-                                 dtype=str, on_bad_lines="skip", low_memory=False)
-        df.columns = [c.strip() for c in df.columns]
-        return df, None
-    except Exception as e:
-        return None, str(e)
-
-
 def _norm_txt(s: str) -> str:
     """Normaliza para casamento (maiúsculas, sem acento, sem sufixos S.A.)."""
     import unicodedata
@@ -2461,111 +2422,63 @@ def _norm_txt(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def _filtrar_ipe_por_empresas(df, nomes_empresas, n_dias, somente_principais=True):
-    """Filtra o IPE pelas empresas (match aproximado por nome) e janela de dias.
-    Adiciona colunas auxiliares _data (datetime) e _match (nome da watchlist).
+# ─────────────────────────────────────────
+# 2b) FETCH B3 PLANTÃO DE NOTÍCIAS (tempo real — fonte do feed de Ações BR)
+# ─────────────────────────────────────────
+_B3_PLANTAO_BASE = "https://sistemasweb.b3.com.br/PlantaoNoticias/Noticias"
 
-    A data usada para a janela é a DATA DE ENTREGA (quando o documento foi
-    protocolado/divulgado à CVM) — é ela que reflete "saiu ontem". A
-    Data_Referencia pode ser bem anterior (ex.: aviso aos acionistas com data
-    de referência do exercício passado) e faria comunicados recém-divulgados
-    caírem fora da janela. Só usa Data_Referencia como fallback.
 
-    somente_principais=True restringe às categorias do feed (Fato Relevante,
-    Comunicado ao Mercado, Aviso aos Acionistas). False mostra todas.
-    """
-    if df is None or df.empty:
-        return pd.DataFrame()
+def _b3_code_from_ticker(ticker: str) -> str:
+    """Deriva o código de negociação B3 a partir do ticker da watchlist.
+    'ABCB4.SA' -> 'ABCB'; 'TAEE11.SA' -> 'TAEE'. É esse código que aparece
+    entre parênteses no headline do Plantão ('ABC BRASIL (ABCB-N2)')."""
+    t = str(ticker or "").upper().strip().split(".")[0]
+    m = re.match(r"^([A-Z]+)", t)
+    return m.group(1) if m else ""
 
-    col_nome = next((c for c in df.columns if c.lower() in
-                     ("nome_companhia", "nome_companhia_b3", "denom_social")), None)
-    col_cat = next((c for c in df.columns if c.lower() == "categoria"), None)
-    # Preferência EXPLÍCITA: data de entrega primeiro, depois data de referência.
-    # (next() sobre df.columns seguiria a ordem das colunas no arquivo, que põe
-    #  Data_Referencia antes de Data_Entrega — daí a escolha errada.)
-    _cols_lower = {c.lower(): c for c in df.columns}
-    col_data = (_cols_lower.get("data_entrega")
-                or _cols_lower.get("data_referencia"))
-    if not (col_nome and col_data):
-        return pd.DataFrame()
 
-    work = df.copy()
-    work["_data"] = pd.to_datetime(work[col_data], errors="coerce")
-    corte = pd.Timestamp(_brt_date()) - pd.Timedelta(days=n_dias)
-    work = work[work["_data"] >= corte]
+@st.cache_data(ttl=600, show_spinner=False)
+def _fetch_b3_plantao(code: str, data_ini: str, data_fim: str):
+    """Consulta o Plantão de Notícias da B3 (agência 18 = comunicados via CVM)
+    pela empresa (código de negociação) e janela de datas (YYYY-MM-DD).
+    Retorna (itens, err). itens = [{id, data(datetime|None), desc, link}]."""
+    if not code:
+        return [], None
+    url = f"{_B3_PLANTAO_BASE}/ListarTitulosNoticias"
+    params = {"agencia": "18", "palavra": code,
+              "dataInicial": data_ini, "dataFinal": data_fim}
+    try:
+        r = requests.get(url, params=params, timeout=30,
+                         headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        return [], str(e)
 
-    # filtra categorias relevantes (se a coluna existir e o usuário pediu)
-    if col_cat and somente_principais:
-        work = work[work[col_cat].astype(str).str.lower().str.strip()
-                    .isin(_IPE_CATEGORIAS_FEED)]
-    if work.empty:
-        return pd.DataFrame()
-
-    # ── Casamento ───────────────────────────────────────────────
-    # Se o ativo tem 'cvm' cadastrado → casa SÓ por Codigo_CVM (exato, estável,
-    # sem falsos positivos). Se não tem → cai para nome: token-set (todos os
-    # tokens significativos presentes) e depois substring do nome/primeiro token.
-    work["_nome_norm"] = work[col_nome].apply(_norm_txt)
-
-    col_codcvm = next((c for c in df.columns if c.lower() == "codigo_cvm"), None)
-    if col_codcvm:
-        work["_codcvm"] = (work[col_codcvm].astype(str)
-                           .str.strip().str.lstrip("0"))
-
-    # nomes_empresas pode ser lista de strings (compat) ou de dicts {name, cvm}
-    alvos = []   # (rotulo, nome_norm, tokens, cod_cvm)
-    _STOP = {"DE", "DA", "DO", "DAS", "DOS", "E", "BANCO", "BRASIL", "BR"}
-    for item in nomes_empresas:
-        if isinstance(item, dict):
-            rotulo = item.get("name", "")
-            cod = str(item.get("cvm", "") or "").strip().lstrip("0")
-        else:
-            rotulo, cod = item, ""
-        nn = _norm_txt(rotulo)
-        toks = {t for t in nn.split(" ") if len(t) >= 3 and t not in _STOP}
-        alvos.append((rotulo, nn, toks, cod))
-
-    def _match_row(row):
-        nome_norm = row["_nome_norm"]
-        cod_row = row.get("_codcvm", "") if col_codcvm else ""
-        for rotulo, nn, toks, cod in alvos:
-            if not nn:
-                continue
-            if cod:
-                # Ativo TEM código cadastrado: casa exclusivamente por código.
-                # (Não cai para nome, evitando falsos positivos como
-                #  "Itaú" → ITAUSA/ITAUNENSE ou "CPFL Energia" → subsidiárias.)
-                if cod_row and cod == cod_row:
-                    return rotulo
-                continue
-            # Ativo SEM código: usa nome (token-set + fallback substring).
-            if toks and all(t in nome_norm for t in toks):
-                return rotulo
-            primeiro = nn.split(" ")[0]
-            if nn in nome_norm or nome_norm in nn or \
-               (len(primeiro) >= 4 and primeiro in nome_norm):
-                return rotulo
-        return None
-
-    work["_match"] = work.apply(_match_row, axis=1)
-    work = work[work["_match"].notna()]
-    if work.empty:
-        return pd.DataFrame()
-
-    # padroniza nomes de colunas de saída esperados pelo render
-    ren = {}
-    if col_cat:
-        ren[col_cat] = "Categoria"
-    col_assunto = next((c for c in df.columns if c.lower() == "assunto"), None)
-    if col_assunto:
-        ren[col_assunto] = "Assunto"
-    col_link = next((c for c in df.columns if c.lower() in
-                     ("link_download", "linkdownload")), None)
-    if col_link:
-        ren[col_link] = "Link_Download"
-    work = work.rename(columns=ren)
-
-    return work.sort_values("_data", ascending=False)
+    from urllib.parse import quote
+    itens = []
+    cod = code.upper()
+    for row in (data or []):
+        msg = (row or {}).get("NwsMsg") or {}
+        headline = str(msg.get("headline") or "")
+        hu = headline.upper()
+        # Garante que é a empresa certa pelo código entre parênteses no headline.
+        if f"({cod}-" not in hu and f"({cod})" not in hu:
+            continue
+        hid = msg.get("id")
+        dttm = str(msg.get("dateTime") or "")
+        # descrição = texto após o primeiro " - " (remove "NOME (COD) - ")
+        partes = headline.split(" - ", 1)
+        desc = (partes[1].strip() if len(partes) > 1 else headline.strip())
+        try:
+            dt = datetime.strptime(dttm[:10], "%Y-%m-%d")
+        except Exception:
+            dt = None
+        link = (f"{_B3_PLANTAO_BASE}/Detail?idNoticia={hid}&agencia=18"
+                f"&dataNoticia={quote(dttm)}")
+        itens.append({"id": hid, "data": dt, "desc": desc, "link": link})
+    itens.sort(key=lambda x: (x["data"] or datetime.min), reverse=True)
+    return itens, None
 
 
 # ================================================================
@@ -6158,63 +6071,6 @@ def _segmentos_sre_relevantes(run_type: str) -> set:
     if df_ab[df_ab["delta"].abs() >= limiar].empty:
         return set()
     return set(_RUN_PARA_SRE.get(run_type, []))
-
-
-def _normaliza_emissor(nome: str) -> str:
-    """Normaliza nome de emissor para comparação aproximada (possível match, não assertivo)."""
-    if not nome:
-        return ""
-    n = nome.upper()
-    for suf in (r"\bS\.?A\.?\b", r"\bLTDA\.?\b", r"\bS\.?C\.?A\.?\b",
-                r"\bFIDC\b", r"\bFII\b", r"\bFIP\b"):
-        n = re.sub(suf, "", n)
-    n = re.sub(r"[^\w\s]", " ", n)
-    return " ".join(n.split())
-
-
-def _similaridade(a: str, b: str) -> float:
-    """Ratio de similaridade entre duas strings (0.0–1.0). Usa SequenceMatcher."""
-    from difflib import SequenceMatcher
-    if not a or not b:
-        return 0.0
-    return SequenceMatcher(None, a, b).ratio()
-
-
-def load_run_emissores_abrindo(run_type: str) -> list:
-    """
-    Retorna lista de emissores com spread_b abrindo >= limiar no run mais recente.
-    Compara run mais recente com o anterior para o mesmo run_type.
-    Usa spread_b (bps) diretamente — não passa por load_run_on.
-    """
-    limiar = st.session_state.get("limiar_bps", LIMIAR_BPS_DEFAULT)
-    try:
-        with _db() as con:
-            datas = con.execute(
-                "SELECT DISTINCT brt_date FROM credito_runs WHERE run_type=?"
-                " ORDER BY brt_date DESC LIMIT 2",
-                (run_type,),
-            ).fetchall()
-        if len(datas) < 2:
-            return []
-        d_hoje, d_ontem = datas[0][0], datas[1][0]
-        with _db() as con:
-            hoje = pd.read_sql_query(
-                "SELECT ativo, emissor, spread_b FROM credito_runs"
-                " WHERE run_type=? AND brt_date=?",
-                con, params=(run_type, d_hoje),
-            )
-            ontem = pd.read_sql_query(
-                "SELECT ativo, spread_b AS spread_b_prev FROM credito_runs"
-                " WHERE run_type=? AND brt_date=?",
-                con, params=(run_type, d_ontem),
-            )
-        merged = hoje.merge(ontem, on="ativo", how="inner")
-        merged["delta"] = merged["spread_b"] - merged["spread_b_prev"]
-        abrindo = merged[merged["delta"] >= limiar]
-        emissores = abrindo["emissor"].dropna().unique().tolist()
-        return [e for e in emissores if e]
-    except Exception:
-        return []
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
