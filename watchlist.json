@@ -2,42 +2,50 @@
   {
     "ticker": "TAEE11.SA",
     "name": "Taesa",
-    "group": "BR"
+    "group": "BR",
+    "cvm": "20257"
   },
   {
     "ticker": "ISAE4.SA",
     "name": "Isa Cteep",
-    "group": "BR"
+    "group": "BR",
+    "cvm": "18376"
   },
   {
     "ticker": "BBSE3.SA",
     "name": "BB Seguridade",
-    "group": "BR"
+    "group": "BR",
+    "cvm": "23159"
   },
   {
     "ticker": "ITUB4.SA",
     "name": "Itaú Unibanco",
-    "group": "BR"
+    "group": "BR",
+    "cvm": "19348"
   },
   {
     "ticker": "SANB11.SA",
     "name": "Santander BR",
-    "group": "BR"
+    "group": "BR",
+    "cvm": "20532"
   },
   {
     "ticker": "BRBI11.SA",
     "name": "BR Advisory",
-    "group": "BR"
+    "group": "BR",
+    "cvm": "25860"
   },
   {
     "ticker": "ABCB4.SA",
     "name": "ABC Brasil",
-    "group": "BR"
+    "group": "BR",
+    "cvm": "20958"
   },
   {
     "ticker": "CPFE3.SA",
     "name": "CPFL Energia",
-    "group": "BR"
+    "group": "BR",
+    "cvm": "18660"
   },
   {
     "ticker": "IND",

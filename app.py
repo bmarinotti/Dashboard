@@ -2006,7 +2006,7 @@ def _ferr_cartas_fii():
                 "para esta sessão (zera ao recarregar).")
 
     # Quantos por lote (evita estouro de memória/tempo no Streamlit Cloud)
-    LOTE = 30
+    LOTE = 45
 
     buffer_atual = _buffer_listar()
     n_buffer = len(buffer_atual)
@@ -2362,9 +2362,9 @@ def render_feed_comunicados():
         if st.button("Atualizar feed", key="cvm_feed_btn", use_container_width=True):
             st.session_state["cvm_feed_run"] = True
 
-    if not st.session_state.get("cvm_feed_run"):
-        st.caption("Clique em “Atualizar feed” para carregar os comunicados.")
-        return
+    # Auto-carrega os últimos 7 dias já na abertura (sem exigir clique).
+    # O botão acima continua valendo como refresh manual.
+    st.session_state.setdefault("cvm_feed_run", True)
 
     wl = st.session_state.get("watchlist") or _load_watchlist()
     ativos_br = [{"name": a.get("name", ""), "cvm": a.get("cvm", "")}
@@ -6675,50 +6675,6 @@ def render_briefing_credito(anbima_df):
     top3_spreads, n_ab, n_fe = _bloco_spreads()
     top3_anbima  = _bloco_anbima()
     novas_html, pipeline_sre, sre_err, sre_data = _bloco_sre()
-
-    # ── Matching por emissor (possível match — fuzzy, threshold 0.82) ──
-    try:
-        df_sre_local, _ = fetch_cvm_sre()
-        emissor_col_sre = _find_col(df_sre_local, "Nome_Emissor")
-        if df_sre_local is not None and not df_sre_local.empty and emissor_col_sre:
-            sre_emissores = df_sre_local[emissor_col_sre].dropna().unique().tolist()
-            LIMIAR_SIM = 0.82
-
-            matches = []
-            sre_norm_list = [(e, _normaliza_emissor(e)) for e in sre_emissores
-                             if _normaliza_emissor(e)]
-
-            for rt in ("CDI", "IPCA"):
-                for em in load_run_emissores_abrindo(rt):
-                    em_norm = _normaliza_emissor(em)
-                    if not em_norm:
-                        continue
-                    melhor_score = 0.0
-                    melhor_nome_sre = None
-                    for nome_sre, norm_sre in sre_norm_list:
-                        score = _similaridade(em_norm, norm_sre)
-                        if score > melhor_score:
-                            melhor_score = score
-                            melhor_nome_sre = nome_sre
-                    if melhor_score >= LIMIAR_SIM:
-                        label_rt = "CDI+" if rt == "CDI" else "IPCA+"
-                        matches.append(
-                            f"<b>{em}</b> ({label_rt}) abrindo · "
-                            f"SRE: {melhor_nome_sre} "
-                            f'<span style="color:var(--text3);font-size:10px">'
-                            f"sim={melhor_score:.0%}</span>"
-                        )
-
-            if matches:
-                aviso = "; ".join(matches[:3])
-                st.markdown(
-                    f'<div class="briefing-synth" style="border-color:#93C5FD;'
-                    f'background:var(--accentbg);color:var(--accent)">'
-                    f'🔍 Possível match emissor: {aviso}</div>',
-                    unsafe_allow_html=True,
-                )
-    except Exception:
-        pass  # matching por emissor é best-effort; falha silenciosa
 
     # ── Grid 3 cards ────────────────────────────────────────────
     html_b1 = html_b2 = html_b3 = ""
