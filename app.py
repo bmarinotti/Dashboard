@@ -135,8 +135,8 @@ hr { border-color: var(--border) !important; margin: 0rem 0 !important }
 }
 .stTabs [data-baseweb="tab-panel"] { padding-top: 1.0rem }
 
-/* ── Separador visual (7ª aba) ── */
-.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(7) {
+/* ── Separador "Auxiliares" — posição 8 (1-based). ⚠️ Atualizar nth-child se a ordem das abas mudar (ex.: ao add/remover aba antes de "Auxiliares"). ── */
+.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(8) {
     pointer-events: none !important; cursor: default !important; gap: 2px;
     color: var(--text3) !important; background: transparent !important;
     box-shadow: none !important; padding: 8px 10px !important;
@@ -144,11 +144,11 @@ hr { border-color: var(--border) !important; margin: 0rem 0 !important }
     opacity: .75 !important; border-left: 1px solid var(--border) !important;
     margin-left: 6px !important; user-select: none !important;
 }
-.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(7)[aria-selected="true"] {
+.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(8)[aria-selected="true"] {
     background: transparent !important; color: var(--border2) !important; box-shadow: none !important;
 }
-/* Abas auxiliares (a partir da 7ª posição) — fonte reduzida */
-.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(n+7) p{
+/* Abas auxiliares (a partir da 8ª posição) — fonte reduzida */
+.stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(n+8) p{
     font-size: 11px !important;
 }
 
@@ -1858,8 +1858,8 @@ def render_ferramentas(di_data=None, anbima_df=None):
         box-shadow: 0 1px 3px rgba(0,0,0,.04) !important;
     }
     /* Override de mesma especificidade das regras de separador das abas
-       principais (nth-child 7 e n+7), restrito ao contexto aninhado. */
-    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(7){
+       principais (nth-child 8 e n+8), restrito ao contexto aninhado. */
+    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(8){
         pointer-events: auto !important; cursor: pointer !important;
         color: var(--text2) !important; background: transparent !important;
         box-shadow: none !important; padding: 8px 16px !important;
@@ -1868,11 +1868,11 @@ def render_ferramentas(di_data=None, anbima_df=None):
         border-left: none !important; margin-left: 0 !important;
         user-select: auto !important;
     }
-    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(7)[aria-selected="true"]{
+    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(8)[aria-selected="true"]{
         background: var(--accentbg) !important; color: var(--accent) !important;
         box-shadow: 0 1px 3px rgba(0,0,0,.04) !important;
     }
-    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(n+7) p{
+    [data-baseweb="tab-panel"] .stTabs [data-baseweb="tab-list"] > [data-baseweb="tab"]:nth-child(n+8) p{
         font-size: 12px !important;
     }
     </style>
