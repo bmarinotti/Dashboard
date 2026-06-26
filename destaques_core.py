@@ -153,8 +153,11 @@ def destaques_juros(serie_hoje, serie_prev, top_n=5):
 
 # ── 4) Spreads de crédito abrindo/fechando ────────────────────────
 def destaques_spreads(registros, limiar_bps):
-    """registros: [{"run_type","emissor","ativo","delta"(bps)}].
-    Mantém |delta| >= limiar_bps; ordena por |delta| desc."""
+    """registros: [{"run_type","emissor","ativo","delta"(bps),
+                    "indexador","compra","venda","mid","spread_b"}].
+    Mantém |delta| >= limiar_bps; ordena por |delta| desc. Propaga os campos
+    de exibição (indexador/compra/venda/mid/spread_b) p/ a camada de render
+    montar a taxa, o bid/ask e o Spread Over B."""
     limiar = abs(limiar_bps) if limiar_bps else 0
     out = []
     for r in (registros or []):
@@ -172,9 +175,55 @@ def destaques_spreads(registros, limiar_bps):
             "delta": float(delta),
             "data": None,
             "link": None,
+            "indexador": r.get("indexador"),
+            "compra": r.get("compra"),
+            "venda": r.get("venda"),
+            "mid": r.get("mid"),
+            "anbima": r.get("anbima"),   # taxa NTN-B de ref. (p/ Spread Over B do IPCA)
+            "run_type": rt,
         })
     out.sort(key=lambda x: abs(x["delta"]), reverse=True)
     return out
+
+
+def _is_num(x):
+    """True se x é número real (não None, não NaN). numpy floats contam."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and x == x
+
+
+def bid_ask_taxa(compra, venda):
+    """Ordena um par de TAXAS (yield) em (bid, ask): o bid é a MAIOR taxa e o
+    ask a MENOR — em renda fixa, yield maior = preço menor, então o bid (compra)
+    tem taxa acima do ask (venda). Robusto a dado invertido (convenção de preço).
+    Retorna (None, None) se faltar algum valor."""
+    if not (_is_num(compra) and _is_num(venda)):
+        return None, None
+    return (compra, venda) if compra >= venda else (venda, compra)
+
+
+def fmt_spread_row(item, fr):
+    """Monta as duas strings de exibição de um item de spread:
+      taxa: '<indexador> <mid>%'   (taxa atual logo após o indexador)
+      meio (sem repetir o indexador) — sempre bid (MAIOR taxa) antes do ask:
+            CDI  -> '<bid> / <ask>%'             (taxas nominais)
+            IPCA -> '<bid_SOB> / <ask_SOB> bps'  (bid/ask em Spread Over B,
+                    cada um = (taxa - anbima)*100; sem prefixo "B+")
+            '—' quando faltar dado
+    `fr` é o formatador numérico do app (fr(valor, casas) -> str) — injetado
+    para manter este módulo livre de dependências de UI."""
+    idx = (item.get("indexador") or "").strip()
+    mid = item.get("mid")
+    bid, ask = bid_ask_taxa(item.get("compra"), item.get("venda"))
+    taxa = f"{idx} {fr(mid, 2)}%" if (idx and _is_num(mid)) else idx
+    if "IPCA" in idx.upper():
+        an = item.get("anbima")
+        if bid is not None and _is_num(an):
+            meio = f"{(bid - an) * 100:.0f} / {(ask - an) * 100:.0f} bps".replace("-", "−")
+        else:
+            meio = "—"
+    else:
+        meio = f"{fr(bid, 2)} / {fr(ask, 2)}%" if bid is not None else "—"
+    return taxa, meio
 
 
 # ── Link público da oferta no SRE da CVM ──────────────────────────

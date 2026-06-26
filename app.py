@@ -1561,27 +1561,15 @@ def render_destaques(di_data, anbima_df):
                                  "ativo": r.get("ativo", ""), "delta": r.get("delta"),
                                  "indexador": r.get("indexador"), "compra": r.get("compra"),
                                  "venda": r.get("venda"), "mid": r.get("mid"),
-                                 "spread_b": r.get("spread_b")})
+                                 "anbima": r.get("anbima")})
         linhas = ""
         for it in dc.destaques_spreads(regs, limiar_bps)[:8]:
-            idx = (it.get("indexador") or "").strip()
-            mid = it.get("mid")
-            # taxa atual (mid) logo após o indexador, com "%"
-            taxa = (f"{idx} {fr(mid, 2)}%" if (idx and mid is not None and pd.notna(mid))
-                    else (idx or it.get("detalhe", "")))
-            # antes do bps: bid/ask (CDI) ou Spread Over B (IPCA), sem repetir o indexador
-            if "IPCA" in idx.upper():
-                sb = it.get("spread_b")
-                meio = (f"B{sb:+.0f} bps".replace("-", "−")) if (sb is not None and pd.notna(sb)) else "—"
-            else:
-                c, v = it.get("compra"), it.get("venda")
-                meio = (f"{fr(c, 2)} / {fr(v, 2)}%"
-                        if (c is not None and v is not None and pd.notna(c) and pd.notna(v)) else "—")
+            taxa, meio = dc.fmt_spread_row(it, fr)   # taxa após indexador · bid/ask ou Spread Over B
             linhas += (f'<div class="briefing-row"><span class="nm"><b>{it["titulo"]}</b> '
                        f'<span style="color:var(--text3);font-size:11px">{taxa}</span></span>'
                        f'<span class="dl">'
                        f'<span style="color:var(--text3);font-size:11px">{meio}</span>&nbsp;'
-                       f'{fd(round(it["delta"]))} bps</span></div>')
+                       f'{fd2(it["delta"], 0, " bps")}</span></div>')
         _card("↔️", "Spreads de crédito · abrindo / fechando", linhas)
     except Exception as e:
         _erro("↔️", "Spreads de crédito · abrindo / fechando", e)
