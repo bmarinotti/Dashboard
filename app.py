@@ -1540,7 +1540,7 @@ def render_destaques(di_data, anbima_df):
         linhas = ""
         for it in dc.destaques_juros(serie_hoje, serie_prev, top_n=6):
             linhas += (f'<div class="briefing-row"><span class="nm">{it["titulo"]}</span>'
-                       f'<span class="dl">{fr(it["valor"], 2)}% &nbsp; {fd(round(it["delta"]))} bps</span></div>')
+                       f'<span class="dl">{fr(it["valor"], 2)}% &nbsp; {fd2(it["delta"], 0, " bps")}</span></div>')
         _card("📊", "Maiores movimentos de juros", linhas)
     except Exception as e:
         _erro("📊", "Maiores movimentos de juros", e)
@@ -1587,6 +1587,7 @@ def render_destaques(di_data, anbima_df):
             tipo_col = _find_col(df_sre, "Tipo")
             vol_col = _find_col(df_sre, "Valor_Total_Registrado")
             num_col = _find_col(df_sre, "Numero_Requerimento")
+            dev_col = _find_col(df_sre, "Identificacao_devedores_coobrigados")
             ofertas = []
             if date_col and emis_col:
                 for _, r in df_sre.iterrows():
@@ -1599,6 +1600,8 @@ def render_destaques(di_data, anbima_df):
                                     "tipo": tipo,
                                     "volume": r.get(vol_col) if vol_col else None,
                                     "data": dt,
+                                    # devedor (lastro) p/ CRI/CRA/Securitização — truncado p/ caber no card
+                                    "devedor": (str(r.get(dev_col, "")).strip()[:48]) if dev_col else None,
                                     "link": dc.sre_oferta_url(r.get(num_col)) if num_col else None})
             for it in dc.destaques_sre(ofertas, d1, d0):
                 v = it.get("valor")

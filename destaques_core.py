@@ -245,9 +245,15 @@ def sre_oferta_url(numero):
 
 
 # ── 5) Novidades no primário (SRE) ────────────────────────────────
+# Tipos cujo título usa o DEVEDOR (lastro) no lugar do emissor (a securitizadora).
+_SRE_TIPOS_USA_DEVEDOR = {"cri", "cra", "securitizacao"}
+
+
 def destaques_sre(ofertas, d1, d0):
-    """ofertas: [{"emissor","tipo","volume","data","link"(opcional)}].
+    """ofertas: [{"emissor","tipo","volume","data","link"(opc.),"devedor"(opc.)}].
     Mantém d1 <= data <= d0; ordena por data desc, depois volume desc.
+    Para CRI/CRA/Securitização o título usa o DEVEDOR (o lastro) no lugar do
+    emissor (a securitizadora), caindo de volta no emissor se o devedor faltar.
     Propaga o 'link' (URL da oferta no SRE) para o item normalizado."""
     di, df = _as_date(d1), _as_date(d0)
     out = []
@@ -255,9 +261,13 @@ def destaques_sre(ofertas, d1, d0):
         dd = _as_date(o.get("data"))
         if dd is None or (di and dd < di) or (df and dd > df):
             continue
+        dev = str(o.get("devedor") or "").strip()
+        usa_dev = (_norm(o.get("tipo")) in _SRE_TIPOS_USA_DEVEDOR
+                   and dev and dev.lower() not in ("nan", "none", "—"))
+        titulo = (dev if usa_dev else (o.get("emissor") or "")) or "—"
         out.append({
             "secao": "sre",
-            "titulo": o.get("emissor") or "—",
+            "titulo": titulo,
             "detalhe": o.get("tipo", ""),
             "valor": o.get("volume"),
             "delta": None,
