@@ -1425,6 +1425,21 @@ def render_conteudo_dinamico(current_calls):
 # ABAS DE CONTEUDO
 # ================================================================
 
+_MES_ABREV = ("", "Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+              "Jul", "Ago", "Set", "Out", "Nov", "Dez")
+# Tipos de oferta SRE exibidos no card de Destaques (dívida + securitização)
+_SRE_DESTAQUE_TIPOS = {"Debênture", "CRI", "CRA", "NC", "Securitização"}
+
+
+def _fmt_di_venc(venc, fallback=""):
+    """Vencimento DI -> 'Mmm-aaaa' (ex.: '2031-01-02' -> 'Jan-2031').
+    Fallback (ex.: o ticker) se não der pra parsear a data."""
+    d = string_or_serial_to_date(venc)
+    if d:
+        return f"{_MES_ABREV[d.month]}-{d.year}"
+    return fallback or str(venc or "—")
+
+
 def render_destaques(di_data, anbima_df):
     """Aba 'Destaques do Dia' — consolida e ranqueia os sinais relevantes do dia
     (ações em movimento, comunicados, juros, spreads, ofertas SRE), reusando os
@@ -1510,7 +1525,7 @@ def render_destaques(di_data, anbima_df):
         serie_hoje, serie_prev = {}, {}
         di_prev = get_prev_bday_ajuste() or {}
         for tk, info in ((di_data or {}).get("tickers") or {}).items():
-            rot = f"DI {info.get('vencimento') or tk}"
+            rot = f"DI {_fmt_di_venc(info.get('vencimento'), tk)}"
             serie_hoje[rot] = info.get("ajuste") or info.get("ultimo")
             if tk in di_prev:
                 serie_prev[rot] = di_prev[tk]
@@ -1543,12 +1558,30 @@ def render_destaques(di_data, anbima_df):
                     continue
                 for _, r in df_mv.iterrows():
                     regs.append({"run_type": rt, "emissor": r.get("emissor", ""),
-                                 "ativo": r.get("ativo", ""), "delta": r.get("delta")})
+                                 "ativo": r.get("ativo", ""), "delta": r.get("delta"),
+                                 "indexador": r.get("indexador"), "compra": r.get("compra"),
+                                 "venda": r.get("venda"), "mid": r.get("mid"),
+                                 "spread_b": r.get("spread_b")})
         linhas = ""
         for it in dc.destaques_spreads(regs, limiar_bps)[:8]:
+            idx = (it.get("indexador") or "").strip()
+            mid = it.get("mid")
+            # taxa atual (mid) logo após o indexador, com "%"
+            taxa = (f"{idx} {fr(mid, 2)}%" if (idx and mid is not None and pd.notna(mid))
+                    else (idx or it.get("detalhe", "")))
+            # antes do bps: bid/ask (CDI) ou Spread Over B (IPCA), sem repetir o indexador
+            if "IPCA" in idx.upper():
+                sb = it.get("spread_b")
+                meio = (f"B{sb:+.0f} bps".replace("-", "−")) if (sb is not None and pd.notna(sb)) else "—"
+            else:
+                c, v = it.get("compra"), it.get("venda")
+                meio = (f"{fr(c, 2)} / {fr(v, 2)}%"
+                        if (c is not None and v is not None and pd.notna(c) and pd.notna(v)) else "—")
             linhas += (f'<div class="briefing-row"><span class="nm"><b>{it["titulo"]}</b> '
-                       f'<span style="color:var(--text3);font-size:11px">{it["detalhe"]}</span></span>'
-                       f'<span class="dl">{fd(round(it["delta"]))} bps</span></div>')
+                       f'<span style="color:var(--text3);font-size:11px">{taxa}</span></span>'
+                       f'<span class="dl">'
+                       f'<span style="color:var(--text3);font-size:11px">{meio}</span>&nbsp;'
+                       f'{fd(round(it["delta"]))} bps</span></div>')
         _card("↔️", "Spreads de crédito · abrindo / fechando", linhas)
     except Exception as e:
         _erro("↔️", "Spreads de crédito · abrindo / fechando", e)
@@ -1569,10 +1602,13 @@ def render_destaques(di_data, anbima_df):
             ofertas = []
             if date_col and emis_col:
                 for _, r in df_sre.iterrows():
+                    tipo = str(r.get(tipo_col, "")) if tipo_col else ""
+                    if tipo not in _SRE_DESTAQUE_TIPOS:   # só dívida + securitização
+                        continue
                     dval = r.get(date_col)
                     dt = dval.date() if hasattr(dval, "date") else dval
                     ofertas.append({"emissor": str(r.get(emis_col, "")),
-                                    "tipo": str(r.get(tipo_col, "")) if tipo_col else "",
+                                    "tipo": tipo,
                                     "volume": r.get(vol_col) if vol_col else None,
                                     "data": dt,
                                     "link": dc.sre_oferta_url(r.get(num_col)) if num_col else None})
