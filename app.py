@@ -1948,27 +1948,54 @@ def _ferr_conversor_pdf():
     # a partir do estado, e não do bloco condicional do botão "Converter".
     if ups and st.button("Converter", type="primary", key="pdf_conv_btn"):
         resultados = []
+        usados = {}  # dedupe de nomes-base: dois PDFs de mesmo nome não colidem
         for up in ups:
             nome = up.name
             base = nome[:-4] if nome.lower().endswith(".pdf") else nome
+            # garante base única (evita download/zip sobrescrevendo arquivo homônimo)
+            n = usados.get(base, 0) + 1
+            usados[base] = n
+            base_dl = base if n == 1 else f"{base}_{n}"
             try:
                 with st.spinner(f"Processando {nome}…"):
                     txt, md, info = _converter_pdf(up.getvalue(), nome, usar_ocr=ocr_on)
             except Exception as e:
-                resultados.append({"nome": nome, "base": base, "erro": str(e)})
+                resultados.append({"nome": nome, "base": base_dl, "erro": str(e)})
                 continue
-            resultados.append({"nome": nome, "base": base, "txt": txt, "md": md,
-                               "info": info, "erro": None})
+            # Pré-codifica os bytes UMA vez: assim os download_button não re-encodam
+            # o texto a cada rerun (PDFs grandes/OCR travavam a página ao baixar).
+            resultados.append({"nome": nome, "base": base_dl, "txt": txt, "md": md,
+                               "info": info, "erro": None,
+                               "txt_bytes": txt.encode("utf-8"),
+                               "md_bytes": md.encode("utf-8")})
         st.session_state["pdf_conv_resultados"] = resultados
+        # Monta o .zip de tudo UMA vez (não reconstrói a cada rerun de download).
+        _buf = io.BytesIO()
+        with zipfile.ZipFile(_buf, "w", zipfile.ZIP_DEFLATED) as _zf:
+            for res in resultados:
+                if res.get("erro"):
+                    continue
+                _zf.writestr(f"{res['base']}.txt", res["txt_bytes"])
+                _zf.writestr(f"{res['base']}.md", res["md_bytes"])
+        st.session_state["pdf_conv_zip"] = _buf.getvalue()
 
     resultados = st.session_state.get("pdf_conv_resultados")
     if resultados:
-        c_lbl, c_clr = st.columns([4, 1])
+        ok = [r for r in resultados if not r.get("erro")]
+        c_lbl, c_zip, c_clr = st.columns([3, 1.6, 1])
+        with c_zip:
+            zip_bytes = st.session_state.get("pdf_conv_zip")
+            if zip_bytes and len(ok) > 1:
+                # Baixa TODOS os convertidos num clique só (um rerun em vez de N).
+                st.download_button("⬇️ Baixar todos (.zip)", zip_bytes,
+                                   file_name="conversor_pdf.zip", mime="application/zip",
+                                   key="pdf_conv_zip_all", use_container_width=True)
         with c_clr:
             if st.button("Limpar", key="pdf_conv_clear", use_container_width=True):
                 del st.session_state["pdf_conv_resultados"]
+                st.session_state.pop("pdf_conv_zip", None)
                 st.rerun(scope="fragment")
-        for res in resultados:
+        for i, res in enumerate(resultados):
             base = res["base"]
             if res["erro"]:
                 st.error(f"{res['nome']}: erro — {res['erro']}")
@@ -1980,13 +2007,17 @@ def _ferr_conversor_pdf():
             if info["pags_vazias"]:
                 meta += f" · {info['pags_vazias']} sem texto"
             st.markdown(f"**{res['nome']}** — {meta}")
+            # bytes pré-codificados; fallback p/ resultados de sessão antiga sem o campo
+            txt_b = res.get("txt_bytes") or res["txt"].encode("utf-8")
+            md_b = res.get("md_bytes") or res["md"].encode("utf-8")
             c1, c2 = st.columns(2)
             with c1:
-                st.download_button("⬇️ .txt", res["txt"].encode("utf-8"), file_name=f"{base}.txt",
-                                   mime="text/plain", key=f"dl_txt_{base}", use_container_width=True)
+                # chave por índice (i) — única por arquivo, evita StreamlitDuplicateElementKey
+                st.download_button("⬇️ .txt", txt_b, file_name=f"{base}.txt",
+                                   mime="text/plain", key=f"dl_txt_{i}", use_container_width=True)
             with c2:
-                st.download_button("⬇️ .md", res["md"].encode("utf-8"), file_name=f"{base}.md",
-                                   mime="text/markdown", key=f"dl_md_{base}", use_container_width=True)
+                st.download_button("⬇️ .md", md_b, file_name=f"{base}.md",
+                                   mime="text/markdown", key=f"dl_md_{i}", use_container_width=True)
             with st.expander(f"Prévia — {base}.txt", expanded=False):
                 st.text(res["txt"][:4000] + ("\n…(truncado)" if len(res["txt"]) > 4000 else ""))
 
